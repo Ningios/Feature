@@ -33,12 +33,12 @@ make clean >/dev/null 2>&1 || true
 make package FINALPACKAGE=1
 
 echo "== 4/5 找产物 =="
-DEB=$(ls packages/*.deb 2>/dev/null | head -1)
+DEB=$(find packages -maxdepth 1 -name "*.deb" 2>/dev/null | head -1)
 if [ -z "$DEB" ]; then
     echo "没生成 deb，看看上面的报错"
     exit 1
 fi
-cp -f "$DEB" /var/mobile/Feature-1.0.0.deb
+cp -f "$DEB" /var/mobile/Feature-1.0.0.deb || cp -f "$DEB" /var/mobile/Feature.deb
 echo "   产物：/var/mobile/Feature-1.0.0.deb"
 
 echo "== 5/5 完成 =="
