@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>title</key>
+	<string>自定义白名单</string>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>填写 bundle ID（多个用逗号分隔），这些 App 点“清除”时不会被清掉。例如：com.tencent.xin,com.tencent.mqq</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>label</key>
+			<string>白名单</string>
+			<key>key</key>
+			<string>clearWhitelist</string>
+			<key>defaults</key>
+			<string>com.ning.feature</string>
+			<key>default</key>
+			<string></string>
+			<key>placeholder</key>
+			<string>com.tencent.xin,com.tencent.mqq</string>
+		</dict>
+	</array>
+</dict>
+</plist>
