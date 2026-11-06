@@ -13,8 +13,16 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 
-extern void MSHookMessageEx(Class cls, SEL sel, IMP replacement, IMP *result);
-extern void MSHookFunction(void *symbol, void *replacement, void **result);
+// substrate 的两个函数在运行时用 dlsym 取，避免链接期依赖 libsubstrate
+typedef void (*SBXHookMsgEx_t)(Class, SEL, IMP, IMP *);
+typedef void (*SBXHookFunction_t)(void *, void *, void **);
+static SBXHookMsgEx_t gHookMsgEx = NULL;
+static SBXHookFunction_t gHookFunction = NULL;
+
+static void SBXLoadSubstrate(void) {
+    if (!gHookMsgEx) gHookMsgEx = (SBXHookMsgEx_t)dlsym(RTLD_DEFAULT, "MSHookMessageEx");
+    if (!gHookFunction) gHookFunction = (SBXHookFunction_t)dlsym(RTLD_DEFAULT, "MSHookFunction");
+}
 
 #define SBDOMAIN "com.ning.feature"
 #define LOGPATH  "/var/mobile/Library/Accessibility/feature.log"
@@ -471,7 +479,9 @@ static void HookMsg(const char *cls, const char *sel, IMP imp, IMP *orig) {
     if (!class_getInstanceMethod(c, s) && !class_getClassMethod(c, s)) {
         SBXLog(@"方法不存在: %s %s", cls, sel); return;
     }
-    MSHookMessageEx(c, s, imp, orig);
+    SBXLoadSubstrate();
+    if (!gHookMsgEx) { SBXLog(@"substrate 不可用，无法挂 %s", sel); return; }
+    gHookMsgEx(c, s, imp, orig);
     SBXLog(@"已挂: %s %s", cls, sel);
 }
 
@@ -494,7 +504,8 @@ __attribute__((constructor)) static void SBXInit(void) {
         HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
         // 3) iPad 悬浮 Dock
         void *sym = dlsym(RTLD_DEFAULT, "isFloatingDockSupported");
-        if (sym) { MSHookFunction(sym, (void *)hook_isFloatingDockSupported, (void **)&orig_isFloatingDockSupported); SBXLog(@"已挂 isFloatingDockSupported"); }
+        SBXLoadSubstrate();
+        if (sym && gHookFunction) { gHookFunction(sym, (void *)hook_isFloatingDockSupported, (void **)&orig_isFloatingDockSupported); SBXLog(@"已挂 isFloatingDockSupported"); }
         HookMsg("SBFloatingDockView", "updateDividerVisualStyling", (IMP)hook_updateDivider, (IMP *)&orig_updateDivider);
         HookMsg("SBFloatingDockDefaults", "recentsEnabled", (IMP)hook_recentsEnabled, (IMP *)&orig_recentsEnabled);
         HookMsg("SBFloatingDockDefaults", "appLibraryEnabled", (IMP)hook_appLibraryEnabled, (IMP *)&orig_appLibraryEnabled);
