@@ -1,0 +1,46 @@
+task:
+  name: build
+  macos_instance:
+    image: ghcr.io/cirruslabs/macos-sonoma-xcode:latest
+
+  build_script: |
+    set -eo pipefail
+    xcodebuild -version
+    xcrun --sdk iphoneos --show-sdk-version
+
+    echo "===== 1. 编译液态玻璃着色器 ====="
+    xcrun -sdk iphoneos metal -c shader/glass.metal -o glass.air
+    xcrun -sdk iphoneos metallib glass.air -o default.metallib
+    ls -l default.metallib
+
+    echo "===== 2. 编译主库（arm64 + arm64e）====="
+    for ARCH in arm64 arm64e; do
+      xcrun --sdk iphoneos clang -fobjc-arc -O2 -target ${ARCH}-apple-ios15.0 \
+        -dynamiclib \
+        -framework Foundation -framework UIKit -framework Metal -framework MetalKit \
+        -framework QuartzCore -framework CoreGraphics \
+        -Wl,-undefined,dynamic_lookup \
+        -Wl,-install_name,@loader_path/SBXDesktop.dylib \
+        -o SBXDesktop-${ARCH}.dylib src/SBXDesktop.mm
+    done
+    xcrun lipo -create -output SBXDesktop.dylib SBXDesktop-arm64.dylib SBXDesktop-arm64e.dylib
+    xcrun codesign --force --sign - SBXDesktop.dylib
+    xcrun lipo -info SBXDesktop.dylib
+
+    echo "===== 3. 编译设置 bundle（arm64 + arm64e）====="
+    for ARCH in arm64 arm64e; do
+      xcrun --sdk iphoneos clang -fobjc-arc -O2 -target ${ARCH}-apple-ios15.0 \
+        -bundle \
+        -framework Foundation -framework UIKit \
+        -Wl,-undefined,dynamic_lookup \
+        -o SBXDesktopPrefs-${ARCH} prefs/SBXDesktopPrefs.mm
+    done
+    xcrun lipo -create -output SBXDesktopPrefs SBXDesktopPrefs-arm64 SBXDesktopPrefs-arm64e
+    xcrun codesign --force --sign - SBXDesktopPrefs
+    xcrun lipo -info SBXDesktopPrefs
+
+  artifacts:
+    path:
+      - SBXDesktop.dylib
+      - SBXDesktopPrefs
+      - default.metallib

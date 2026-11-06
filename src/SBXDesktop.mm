@@ -61,7 +61,7 @@ typedef struct {
 @interface LGGlassButtonView : MTKView
 @property (nonatomic, strong) id<MTLCommandQueue> queue;
 @property (nonatomic, strong) id<MTLRenderPipelineState> pipeline;
-@property (nonatomic, strong) MTLTexture *bgTex;
+@property (nonatomic, strong) id<MTLTexture> bgTex;
 @property (nonatomic) CGPoint bgOrigin;
 @property (nonatomic) CGSize bgSize;
 @property (nonatomic) float scale;
@@ -71,7 +71,7 @@ typedef struct {
 @implementation LGGlassButtonView
 - (id<MTLLibrary>)lgLoadLibrary:(NSError **)err {
     Dl_info info;
-    if (dladdr((void *)&OBJC_CLASS___LGGlassButtonView, &info) && info.dli_fname) {
+    if (dladdr((__bridge void *)[self class], &info) && info.dli_fname) {
         NSString *dir = [NSString stringWithUTF8String:info.dli_fname].stringByDeletingLastPathComponent;
         for (NSString *rel in @[@"../../share/glassclear/default.metallib",
                                 @"../share/glassclear/default.metallib"]) {
@@ -202,10 +202,9 @@ static NSString *SBXNowPlayingBundleID(void) {
     id mc = nil;
     if ([c respondsToSelector:@selector(sharedInstance)]) mc = [c sharedInstance];
     if (!mc) return nil;
-    BOOL playing = [mc respondsToSelector:@selector(isPlaying)] ? [mc performSelector:@selector(isPlaying)] : NO;
+    BOOL playing = [(SBMediaController *)mc isPlaying];
     if (!playing) return nil;
-    id app = nil;
-    if ([mc respondsToSelector:@selector(nowPlayingApplication)]) app = [mc performSelector:@selector(nowPlayingApplication)];
+    id app = [(SBMediaController *)mc nowPlayingApplication];
     if (!app) return nil;
     if ([app respondsToSelector:@selector(bundleIdentifier)]) return [app performSelector:@selector(bundleIdentifier)];
     return nil;
@@ -432,13 +431,13 @@ static BOOL hook_appLibraryEnabled(id self, SEL _cmd) {
     return (c == 1 || c == 2);
 }
 static id (*orig_initSuggestions)(id, SEL, NSUInteger, id, id, id, id, id, id, id, id);
-static id hook_initSuggestions(id self, SEL _cmd, NSUInteger n, id a1, id a2, id a3, id a4, id a5, id a6, id a7) {
+static id hook_initSuggestions(id self, SEL _cmd, NSUInteger n, id a1, id a2, id a3, id a4, id a5, id a6, id a7, id a8) {
     NSUInteger nn = n;
     if (SBXBool(@"floatingDock", NO) && n > 0) {
         nn = (NSUInteger)SBXNum(@"dockIconCount", 4, 1, 10);
         SBXLog(@"Dock 建议数量 %lu -> %lu", (unsigned long)n, (unsigned long)nn);
     }
-    return orig_initSuggestions ? orig_initSuggestions(self, _cmd, nn, a1, a2, a3, a4, a5, a6, a7) : nil;
+    return orig_initSuggestions ? orig_initSuggestions(self, _cmd, nn, a1, a2, a3, a4, a5, a6, a7, a8) : nil;
 }
 static BOOL (*orig_shouldHideInAppDock)(id, SEL);
 static BOOL hook_shouldHideInAppDock(id self, SEL _cmd) {

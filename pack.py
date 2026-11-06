@@ -1,61 +1,70 @@
 #!/usr/bin/env python3
-"""把编译产物 + 布局 + 设置页打成 deb（桌面功能 三合一独立包）
+"""打包 Feature：layout（单文件设置页 + 图标）+ dylib + 可选 metallib + Sileo 图标
 用法：python3 pack.py <编译产物目录>
 """
 import os, shutil, subprocess, hashlib, sys
 
 BASE = "/var/minis/shared/sbx-split/desktop"
-ART  = sys.argv[1] if len(sys.argv) > 1 else "/tmp/sbxdesk"
-OUT  = "/var/minis/attachments/SBX-Desktop_1.0.0_iphoneos-arm64e.deb"
-W    = "/tmp/sbxdesk-pack"
+ART  = sys.argv[1] if len(sys.argv) > 1 else "/tmp/build_local"
+OUT  = "/var/minis/attachments/Feature-1.0.0_iphoneos-arm64e.deb"
+W    = "/tmp/feature-pack"
 
 shutil.rmtree(W, ignore_errors=True)
 tree = os.path.join(W, "tree")
 shutil.copytree(os.path.join(BASE, "layout"), tree)
 
-DL = os.path.join(tree, "Library/MobileSubstrate/DynamicLibraries")
+
+# --- 设置 bundle ---
 PB = os.path.join(tree, "Library/PreferenceBundles/SBXDesktopPrefs.bundle")
-os.makedirs(DL, exist_ok=True); os.makedirs(PB, exist_ok=True)
-
-shutil.copyfile(os.path.join(ART, "SBXDesktop.dylib"), os.path.join(DL, "SBXDesktop.dylib"))
-os.chmod(os.path.join(DL, "SBXDesktop.dylib"), 0o755)
-
+os.makedirs(PB, exist_ok=True)
 for f in ("Info.plist", "Root.plist", "Whitelist.plist"):
     shutil.copyfile(os.path.join(BASE, "prefs", f), os.path.join(PB, f))
     os.chmod(os.path.join(PB, f), 0o644)
-
-# 设置入口图标（29/58/87）
+_pe = os.path.join(ART, "SBXDesktopPrefs")
+if os.path.exists(_pe):
+    shutil.copyfile(_pe, os.path.join(PB, "SBXDesktopPrefs"))
+    os.chmod(os.path.join(PB, "SBXDesktopPrefs"), 0o755)
 for f in ("icon.png", "icon@2x.png", "icon@3x.png"):
-    if os.path.exists(os.path.join(BASE, "prefs", f)):
-        shutil.copyfile(os.path.join(BASE, "prefs", f), os.path.join(PB, f))
-        os.chmod(os.path.join(PB, f), 0o644)
-
-# 自绘图标（29/58/87 三档）一起进 bundle
-icodir = os.path.join(BASE, "prefs/icons_solid")   # 正式图标：实心（加粗）风格
-n = 0
-for f in os.listdir(icodir):
+    shutil.copyfile(os.path.join(BASE, "prefs", f), os.path.join(PB, f))
+    os.chmod(os.path.join(PB, f), 0o644)
+for f in os.listdir(os.path.join(BASE, "prefs/icons_solid")):
     if f.endswith(".png"):
-        shutil.copyfile(os.path.join(icodir, f), os.path.join(PB, f))
-        os.chmod(os.path.join(PB, f), 0o644); n += 1
-print("图标:", n, "个")
-shutil.copyfile(os.path.join(ART, "SBXDesktopPrefs"), os.path.join(PB, "SBXDesktopPrefs"))
-os.chmod(os.path.join(PB, "SBXDesktopPrefs"), 0o755)
+        shutil.copyfile(os.path.join(BASE, "prefs/icons_solid", f), os.path.join(PB, f))
+        os.chmod(os.path.join(PB, f), 0o644)
+print("设置 bundle 文件数:", len(os.listdir(PB)))
 
-# 航的液态玻璃着色器（metallib）
-md = os.path.join(tree, "usr/share/glassclear"); os.makedirs(md, exist_ok=True)
-shutil.copyfile(os.path.join(ART, "default.metallib"), os.path.join(md, "default.metallib"))
-os.chmod(os.path.join(md, "default.metallib"), 0o644)
+# --- 主库 ---
+DL = os.path.join(tree, "Library/MobileSubstrate/DynamicLibraries")
+os.makedirs(DL, exist_ok=True)
+shutil.copyfile(os.path.join(ART, "SBXDesktop.dylib"), os.path.join(DL, "SBXDesktop.dylib"))
+os.chmod(os.path.join(DL, "SBXDesktop.dylib"), 0o755)
 
-# Sileo 包图标
-ic = os.path.join(tree, "usr/share/icons"); os.makedirs(ic, exist_ok=True)
-shutil.copyfile(os.path.join(BASE, "plugins_icons/feature.png"), os.path.join(ic, "com.ning.feature.png"))
-shutil.copyfile(os.path.join(BASE, "plugins_icons/feature-256.png"), os.path.join(ic, "com.ning.feature-256.png"))
-os.chmod(os.path.join(ic, "com.ning.feature.png"), 0o644)
+# --- 液态玻璃着色器（有就带） ---
+md = os.path.join(tree, "usr/share/glassclear")
+os.makedirs(md, exist_ok=True)
+_ml = os.path.join(ART, "default.metallib")
+if os.path.exists(_ml):
+    shutil.copyfile(_ml, os.path.join(md, "default.metallib"))
+    os.chmod(os.path.join(md, "default.metallib"), 0o644)
+    print("已包含 default.metallib（液态玻璃可用）")
+else:
+    print("⚠️ 无 default.metallib：按钮回退系统材质")
 
+# --- Sileo 包图标 ---
+ic = os.path.join(tree, "usr/share/icons")
+os.makedirs(ic, exist_ok=True)
+for src, dst in (("feature.png", "com.ning.feature.png"),
+                 ("feature-256.png", "com.ning.feature-256.png")):
+    p = os.path.join(BASE, "plugins_icons", src)
+    if os.path.exists(p):
+        shutil.copyfile(p, os.path.join(ic, dst))
+        os.chmod(os.path.join(ic, dst), 0o644)
+
+# --- control ---
 os.makedirs(os.path.join(tree, "DEBIAN"), exist_ok=True)
 control = """Package: com.ning.feature
 Section: Tweaks
-Installed-Size: 500
+Installed-Size: 600
 Maintainer: Ning
 Architecture: iphoneos-arm64e
 Version: 1.0.0
@@ -67,7 +76,8 @@ Icon: file:///usr/share/icons/com.ning.feature.png
 """
 open(os.path.join(tree, "DEBIAN/control"), "w").write(control)
 
-if os.path.exists(OUT): os.remove(OUT)
+if os.path.exists(OUT):
+    os.remove(OUT)
 subprocess.run(["dpkg-deb", "-Zgzip", "-b", tree, OUT], check=True)
 data = open(OUT, "rb").read()
 print("PACKED:", OUT, len(data), "bytes")
