@@ -1,0 +1,62 @@
+name: build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: xcodebuild -version && xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Compile metallib (航的液态玻璃着色器)
+        run: |
+          set -eo pipefail
+          xcrun -sdk iphoneos metal -c shader/glass.metal -o /tmp/glass.air
+          xcrun -sdk iphoneos metallib /tmp/glass.air -o default.metallib
+          ls -l default.metallib
+
+      - name: Build dylib (arm64 + arm64e)
+        run: |
+          set -eo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          for ARCH in arm64 arm64e; do
+            xcrun --sdk iphoneos clang -fobjc-arc -O2 -isysroot "$SDK" \
+              -target ${ARCH}-apple-ios15.0 -dynamiclib \
+              -framework Foundation -framework UIKit -framework Metal -framework MetalKit \
+              -framework QuartzCore -framework CoreFoundation \
+              -Wl,-undefined,dynamic_lookup \
+              -Wl,-install_name,@loader_path/SBXDesktop.dylib \
+              -o SBXDesktop-${ARCH}.dylib src/SBXDesktop.mm
+          done
+          xcrun lipo -create -output SBXDesktop.dylib SBXDesktop-arm64.dylib SBXDesktop-arm64e.dylib
+          xcrun codesign --force --sign - SBXDesktop.dylib
+          xcrun lipo -info SBXDesktop.dylib
+
+      - name: Build prefs bundle executable (arm64 + arm64e)
+        run: |
+          set -eo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          for ARCH in arm64 arm64e; do
+            xcrun --sdk iphoneos clang -fobjc-arc -O2 -isysroot "$SDK" \
+              -target ${ARCH}-apple-ios15.0 -bundle \
+              -framework Foundation -framework UIKit \
+              -Wl,-undefined,dynamic_lookup \
+              -o SBXDesktopPrefs-${ARCH} prefs/SBXDesktopPrefs.mm
+          done
+          xcrun lipo -create -output SBXDesktopPrefs SBXDesktopPrefs-arm64 SBXDesktopPrefs-arm64e
+          xcrun codesign --force --sign - SBXDesktopPrefs
+          xcrun lipo -info SBXDesktopPrefs
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature
+          path: |
+            SBXDesktop.dylib
+            SBXDesktopPrefs
+            default.metallib
+          if-no-files-found: error

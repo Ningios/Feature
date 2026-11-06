@@ -1,0 +1,10 @@
+{
+	entry = {
+		bundle = SBXDesktopPrefs;
+		cell = PSLinkCell;
+		detail = SBXDesktopListController;
+		icon = "icon.png";
+		isController = 1;
+		label = "Feature";
+	};
+}
