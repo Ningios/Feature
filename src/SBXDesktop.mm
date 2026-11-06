@@ -10,6 +10,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <dlfcn.h>
 
 extern void MSHookMessageEx(Class cls, SEL sel, IMP replacement, IMP *result);
@@ -27,6 +28,25 @@ static void SBXLog(NSString *fmt, ...) {
     NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [f stringFromDate:[NSDate date]], msg];
     FILE *fp = fopen(LOGPATH, "a");
     if (fp) { fputs(line.UTF8String, fp); fclose(fp); }
+}
+
+
+// 安全调用实例方法（避免 performSelector 的 ARC 警告）
+static id SBXIdCall(id obj, NSString *name) {
+    if (!obj) return nil;
+    SEL sel = NSSelectorFromString(name);
+    if (![obj respondsToSelector:sel]) return nil;
+    id (*fn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+    return fn(obj, sel);
+}
+
+// 安全地调用类方法（避免 performSelector 的 ARC 警告）
+static id SBXClassCall(Class c, NSString *name) {
+    if (!c) return nil;
+    SEL sel = NSSelectorFromString(name);
+    if (![c respondsToSelector:sel]) return nil;
+    id (*fn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+    return fn((id)c, sel);
 }
 
 #pragma mark - 偏好
@@ -206,7 +226,8 @@ static NSString *SBXNowPlayingBundleID(void) {
     if (!playing) return nil;
     id app = [(SBMediaController *)mc nowPlayingApplication];
     if (!app) return nil;
-    if ([app respondsToSelector:@selector(bundleIdentifier)]) return [app performSelector:@selector(bundleIdentifier)];
+    id bid = SBXIdCall(app, @"bundleIdentifier");
+    if ([bid isKindOfClass:NSString.class]) return bid;
     return nil;
 }
 
@@ -215,10 +236,8 @@ static void SBXKillAllBackgroundApps(void) {
     for (NSString *cn in @[@"SBMainSwitcherControllerCoordinator", @"SBAppSwitcherController"]) {
         Class c = NSClassFromString(cn);
         if (!c) continue;
-        if ([c respondsToSelector:NSSelectorFromString(@"sharedInstanceIfExists")])
-            coord = [c performSelector:NSSelectorFromString(@"sharedInstanceIfExists")];
-        if (!coord && [c respondsToSelector:NSSelectorFromString(@"sharedInstance")])
-            coord = [c performSelector:NSSelectorFromString(@"sharedInstance")];
+        coord = SBXClassCall(c, @"sharedInstanceIfExists");
+        if (!coord) coord = SBXClassCall(c, @"sharedInstance");
         if (coord) { SBXLog(@"清除后台：控制器 = %@", cn); break; }
     }
     if (!coord) { SBXLog(@"清除后台：找不到切换器控制器"); return; }
@@ -261,10 +280,8 @@ static void SBXKillAllBackgroundApps(void) {
         if (nowPlaying && [bid isEqualToString:nowPlaying]) { skipped++; continue; }
         if (whitelist && [whitelist containsObject:bid]) { skipped++; continue; }
         if ([coord respondsToSelector:delSel]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-            [coord performSelector:delSel withObject:bid];
-#pragma clang diagnostic pop
+            void (*delFn)(id, SEL, id) = (void (*)(id, SEL, id))objc_msgSend;
+            delFn(coord, delSel, bid);
             killed++;
         }
     }
