@@ -5,32 +5,35 @@
 #import <UIKit/UIKit.h>
 
 @interface PSListController : UIViewController
-{
-    NSArray *_specifiers;
-}
 - (NSArray *)loadSpecifiersFromPlistName:(NSString *)name target:(id)target;
 @end
 
 @interface SBXDesktopListController : PSListController
+{
+    NSArray *_sbxSpecs;
+}
 @end
 
 @implementation SBXDesktopListController
 - (NSArray *)specifiers {
-    if (!_specifiers) {
-        _specifiers = [self loadSpecifiersFromPlistName:@"Root" target:self];
+    if (!_sbxSpecs) {
+        _sbxSpecs = [self loadSpecifiersFromPlistName:@"Root" target:self];
     }
-    return _specifiers;
+    return _sbxSpecs;
 }
 @end
 
 @interface SBXWhitelistController : PSListController
+{
+    NSArray *_sbxSpecs;
+}
 @end
 
 @implementation SBXWhitelistController
 - (NSArray *)specifiers {
-    if (!_specifiers) {
-        _specifiers = [self loadSpecifiersFromPlistName:@"Whitelist" target:self];
+    if (!_sbxSpecs) {
+        _sbxSpecs = [self loadSpecifiersFromPlistName:@"Whitelist" target:self];
     }
-    return _specifiers;
+    return _sbxSpecs;
 }
 @end

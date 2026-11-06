@@ -17,4 +17,6 @@ SBXDesktopPrefs_FILES = prefs/SBXDesktopPrefs.mm
 SBXDesktopPrefs_CFLAGS = -fobjc-arc
 SBXDesktopPrefs_FRAMEWORKS = Foundation UIKit
 SBXDesktopPrefs_INSTALL_PATH = /Library/PreferenceBundles
+SBXDesktopPrefs_LDFLAGS = -Wl,-undefined,dynamic_lookup
+SBXDesktopPrefs_PRIVATE_FRAMEWORKS = Preferences
 include $(THEOS_MAKE_PATH)/bundle.mk
