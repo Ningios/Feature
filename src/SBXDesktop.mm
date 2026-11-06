@@ -455,15 +455,6 @@ static BOOL hook_appLibraryEnabled(id self, SEL _cmd) {
     NSInteger c = (NSInteger)SBXNum(@"dockContent", 0, 0, 3);
     return (c == 1 || c == 2);
 }
-static id (*orig_initSuggestions)(id, SEL, NSUInteger, id, id, id, id, id, id, id, id);
-static id hook_initSuggestions(id self, SEL _cmd, NSUInteger n, id a1, id a2, id a3, id a4, id a5, id a6, id a7, id a8) {
-    NSUInteger nn = n;
-    if (SBXBool(@"floatingDock", NO) && n > 0) {
-        nn = (NSUInteger)SBXNum(@"dockIconCount", 4, 1, 10);
-        SBXLog(@"Dock 建议数量 %lu -> %lu", (unsigned long)n, (unsigned long)nn);
-    }
-    return orig_initSuggestions ? orig_initSuggestions(self, _cmd, nn, a1, a2, a3, a4, a5, a6, a7, a8) : nil;
-}
 static BOOL (*orig_shouldHideInAppDock)(id, SEL);
 static BOOL hook_shouldHideInAppDock(id self, SEL _cmd) {
     if (SBXBool(@"floatingDock", NO) && SBXBool(@"showInApps", NO)) return NO;
@@ -494,22 +485,57 @@ static void hook_vcLayout(id self, SEL _cmd) {
 
 __attribute__((constructor)) static void SBXInit(void) {
     @autoreleasepool {
-        SBXLog(@"==== SBXDesktop 装载 ====");
-        // 1) 清除按钮
-        HookMsg("SBFluidSwitcherViewController", "viewDidLayoutSubviews", (IMP)hook_vcLayout, (IMP *)&orig_vcLayout);
-        // 2) iPad 卡片后台
-        HookMsg("SBFluidSwitcherViewController", "isDevicePad", (IMP)hook_isDevicePad, (IMP *)&orig_isDevicePad);
-        HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
-        HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
-        HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
-        // 3) iPad 悬浮 Dock
-        void *sym = dlsym(RTLD_DEFAULT, "isFloatingDockSupported");
+        // 只有对应开关打开时，才挂载那个功能的 hook。
+        // 默认全关 → 装上去等于没装，绝不会因为本插件导致 SpringBoard 崩溃。
+        BOOL clearBtn = SBXBool(@"clearButton", NO);
+        BOOL cards    = SBXBool(@"cardSwitcher", NO);
+        BOOL dock     = SBXBool(@"floatingDock", NO);
+        SBXLog(@"==== SBXDesktop 装载：清除按钮=%@ 卡片后台=%@ 悬浮Dock=%@ ====",
+               clearBtn ? @"开" : @"关", cards ? @"开" : @"关", dock ? @"开" : @"关");
+
+        if (!clearBtn && !cards && !dock) {
+            SBXLog(@"三项都未启用，跳过全部 hook");
+            return;
+        }
+
         SBXLoadSubstrate();
-        if (sym && gHookFunction) { gHookFunction(sym, (void *)hook_isFloatingDockSupported, (void **)&orig_isFloatingDockSupported); SBXLog(@"已挂 isFloatingDockSupported"); }
-        HookMsg("SBFloatingDockView", "updateDividerVisualStyling", (IMP)hook_updateDivider, (IMP *)&orig_updateDivider);
-        HookMsg("SBFloatingDockDefaults", "recentsEnabled", (IMP)hook_recentsEnabled, (IMP *)&orig_recentsEnabled);
-        HookMsg("SBFloatingDockDefaults", "appLibraryEnabled", (IMP)hook_appLibraryEnabled, (IMP *)&orig_appLibraryEnabled);
-        HookMsg("SBFloatingDockSuggestionsModel", "initWithMaximumNumberOfSuggestions:iconController:recentsController:recentsDataStore:recentsDefaults:floatingDockDefaults:appSuggestionManager:analyticsClient:applicationController:", (IMP)hook_initSuggestions, (IMP *)&orig_initSuggestions);
-        HookMsg("SBDeckSwitcherModifier", "shouldConfigureInAppDockHiddenAssertion", (IMP)hook_shouldHideInAppDock, (IMP *)&orig_shouldHideInAppDock);
+        if (!gHookMsgEx) { SBXLog(@"substrate 不可用，放弃挂载"); return; }
+
+        // 1) 后台一键清除按钮
+        if (clearBtn) {
+            HookMsg("SBFluidSwitcherViewController", "viewDidLayoutSubviews",
+                    (IMP)hook_vcLayout, (IMP *)&orig_vcLayout);
+        }
+
+        // 2) iPad 卡片后台
+        if (cards) {
+            HookMsg("SBFluidSwitcherViewController", "isDevicePad",
+                    (IMP)hook_isDevicePad, (IMP *)&orig_isDevicePad);
+            HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale",
+                    (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
+            HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait",
+                    (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
+            HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait",
+                    (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
+        }
+
+        // 3) iPad 悬浮 Dock
+        if (dock) {
+            void *sym = dlsym(RTLD_DEFAULT, "isFloatingDockSupported");
+            if (sym && gHookFunction) {
+                gHookFunction(sym, (void *)hook_isFloatingDockSupported,
+                              (void **)&orig_isFloatingDockSupported);
+                SBXLog(@"已挂 isFloatingDockSupported");
+            }
+            HookMsg("SBFloatingDockView", "updateDividerVisualStyling",
+                    (IMP)hook_updateDivider, (IMP *)&orig_updateDivider);
+            HookMsg("SBFloatingDockDefaults", "recentsEnabled",
+                    (IMP)hook_recentsEnabled, (IMP *)&orig_recentsEnabled);
+            HookMsg("SBFloatingDockDefaults", "appLibraryEnabled",
+                    (IMP)hook_appLibraryEnabled, (IMP *)&orig_appLibraryEnabled);
+            HookMsg("SBDeckSwitcherModifier", "shouldConfigureInAppDockHiddenAssertion",
+                    (IMP)hook_shouldHideInAppDock, (IMP *)&orig_shouldHideInAppDock);
+        }
+        SBXLog(@"hook 安装完成");
     }
 }
