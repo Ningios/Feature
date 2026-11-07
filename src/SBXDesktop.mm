@@ -159,10 +159,10 @@ typedef struct { vector_float4 viewport, geometry, optical, appearance, tint, in
     u.viewport = (vector_float4){ (float)self.bgSize.width, (float)self.bgSize.height,
                                   (float)self.bgOrigin.x * s, (float)self.bgOrigin.y * s };
     u.geometry = (vector_float4){ w, h, h * 0.5f, MAX(3.0f, MIN(h * 0.34f, 14.0f * s)) };
-    u.optical = (vector_float4){ 0.0f, 1.52f, 0.90f, 10.0f * s };
-    u.appearance = (vector_float4){ 0.90f, 1.18f, 0.07f, 7.0f * s };
+    u.optical = (vector_float4){ 1.5f * s, 1.52f, 0.95f, 10.0f * s };
+    u.appearance = (vector_float4){ 1.00f, 1.22f, 0.12f, 8.0f * s };
     u.tint = (vector_float4){ 1, 1, 1, 1 };
-    u.innerShadow = (vector_float4){ 0, 0, 0, 2.5f * s };
+    u.innerShadow = (vector_float4){ 0, 0, 0, 3.0f * s };
     id<MTLCommandBuffer> cb = [self.queue commandBuffer];
     id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
     [enc setRenderPipelineState:self.pipeline];
@@ -369,7 +369,7 @@ static void SBXAttachGlass(UIButton *b, BOOL force) {
         LGGlassButtonView *old = objc_getAssociatedObject(b, &kGlassKey);
         if (old) { [old removeFromSuperview]; objc_setAssociatedObject(b, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
     } else if (objc_getAssociatedObject(b, &kGlassKey)) return;
-    if (!SBXBool(@"clearGlass", NO)) return;
+    if (!SBXBool(@"clearGlass", YES)) return;
     UIWindow *win = b.window; if (!win) return;
     UIVisualEffectView *blur = (UIVisualEffectView *)[b viewWithTag:kBlurTag];
     CGRect inWin = [b convertRect:b.bounds toView:win];
@@ -424,7 +424,7 @@ static void hook_switcherLayout(id self, SEL _cmd) {
     if (![self isKindOfClass:UIViewController.class]) return;
     UIViewController *vc = (UIViewController *)self;
     UIButton *b = (UIButton *)[vc.view viewWithTag:kBtnTag];
-    if (b && b.bounds.size.width > 4) SBXAttachGlass(b, NO);
+    if (b && b.bounds.size.width > 4 && !b.hidden) SBXAttachGlass(b, NO);
 }
 
 // viewWillAppear：原版在此显示按钮
