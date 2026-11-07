@@ -506,7 +506,7 @@ static void hook_setScrollEnabled(id self, SEL _cmd, BOOL enabled) {
 static _Thread_local int gPadIdiom = 0;
 static BOOL gFakePadIdiom = NO;
 static NSInteger (*orig_idiom)(id, SEL);
-static NSInteger hook_idiom(id self, SEL _cmd) {
+__attribute__((unused)) static NSInteger hook_idiom(id self, SEL _cmd) {
     if (gPadIdiom > 0 && CardsOn()) return 2;   // UIUserInterfaceIdiomPad
     return orig_idiom ? orig_idiom(self, _cmd) : 0;
 }
@@ -538,7 +538,7 @@ static double hook_gridPageScale(id self, SEL _cmd) {
 }
 // 系统若自己回写缩放，也要拦住
 static void (*orig_setGridPageScale)(id, SEL, double);
-static void hook_setGridPageScale(id self, SEL _cmd, double v) {
+__attribute__((unused)) static void hook_setGridPageScale(id self, SEL _cmd, double v) {
     if (orig_setGridPageScale) orig_setGridPageScale(self, _cmd, v);
 }
 static double (*orig_gridHSpacing)(id, SEL);
@@ -552,7 +552,7 @@ static double hook_gridVSpacing(id self, SEL _cmd) {
     return CardsOn() ? v * SBXNum(@"cardVSpacing", 1.0, 0.1, 2.0) : v;
 }
 static void (*orig_setDefaultValues)(id, SEL);
-static void hook_setDefaultValues(id self, SEL _cmd) {
+__attribute__((unused)) static void hook_setDefaultValues(id self, SEL _cmd) {
     if (orig_setDefaultValues) orig_setDefaultValues(self, _cmd);
     if (!CardsOn()) return;
     void (*f)(id, SEL, double) = (void (*)(id, SEL, double))objc_msgSend;
@@ -562,13 +562,13 @@ static void hook_setDefaultValues(id self, SEL _cmd) {
     if ([self respondsToSelector:s2]) f(self, s2, 0.0);
 }
 static void (*orig_iconContainerDidMove)(id, SEL);
-static void hook_iconContainerDidMove(id self, SEL _cmd) {
+__attribute__((unused)) static void hook_iconContainerDidMove(id self, SEL _cmd) {
     if (orig_iconContainerDidMove) orig_iconContainerDidMove(self, _cmd);
     // 原版会对图标容器做 0.8 缩放；实测卡顿明显，先不做
 }
 
 static BOOL (*orig_isDevicePad)(id, SEL);
-static BOOL hook_isDevicePad(id self, SEL _cmd) {
+__attribute__((unused)) static BOOL hook_isDevicePad(id self, SEL _cmd) {
     // 不强制（原版这本属"以 iPad 形式打开 App"功能）；网格样式靠 effectiveSwitcherStyle=2 + idiom 窗口
     return orig_isDevicePad ? orig_isDevicePad(self, _cmd) : NO;
 }
@@ -576,13 +576,13 @@ static BOOL hook_isDevicePad(id self, SEL _cmd) {
 
 // ---- 动画：把假 iPad idiom 计数也包在这两个转场入口上（TrollPad 的做法）----
 static void (*orig_overlayTransBegin)(id, SEL, id, id);
-static void hook_overlayTransBegin(id self, SEL _cmd, id coord, id ctx) {
+__attribute__((unused)) static void hook_overlayTransBegin(id self, SEL _cmd, id coord, id ctx) {
     if (gFakePadIdiom) gPadIdiom++;
     @try { if (orig_overlayTransBegin) orig_overlayTransBegin(self, _cmd, coord, ctx); }
     @finally { gPadIdiom--; }
 }
 static void (*orig_updateContent)(id, SEL);
-static void hook_updateContent(id self, SEL _cmd) {
+__attribute__((unused)) static void hook_updateContent(id self, SEL _cmd) {
     if (gFakePadIdiom) gPadIdiom++;
     @try { if (orig_updateContent) orig_updateContent(self, _cmd); }
     @finally { gPadIdiom--; }
@@ -591,7 +591,7 @@ static void hook_updateContent(id self, SEL _cmd) {
 
 // ---- 网格尺寸：最小值钳到 150（TrollPad：更小会崩/错位）----
 static void (*orig_setGridWidths)(id, SEL, id);
-static void hook_setGridWidths(id self, SEL _cmd, id values) {
+__attribute__((unused)) static void hook_setGridWidths(id self, SEL _cmd, id values) {
     if (CardsOn() && [values isKindOfClass:NSArray.class] && [values count]) {
         NSUInteger maxValue = [[values lastObject] unsignedIntegerValue];
         if (maxValue > 150) {
@@ -605,7 +605,7 @@ static void hook_setGridWidths(id self, SEL _cmd, id values) {
     if (orig_setGridWidths) orig_setGridWidths(self, _cmd, values);
 }
 static void (*orig_setGridHeights)(id, SEL, id);
-static void hook_setGridHeights(id self, SEL _cmd, id values) {
+__attribute__((unused)) static void hook_setGridHeights(id self, SEL _cmd, id values) {
     if (CardsOn() && [values isKindOfClass:NSArray.class] && [values count]) {
         NSUInteger maxValue = [[values lastObject] unsignedIntegerValue];
         if (maxValue > 150) {
@@ -619,13 +619,13 @@ static void hook_setGridHeights(id self, SEL _cmd, id values) {
 }
 // 舞台 App 上限
 static unsigned long (*orig_maxAppsOnStage)(id, SEL);
-static unsigned long hook_maxAppsOnStage(id self, SEL _cmd) {
+__attribute__((unused)) static unsigned long hook_maxAppsOnStage(id self, SEL _cmd) {
     if (CardsOn()) return 5;
     return orig_maxAppsOnStage ? orig_maxAppsOnStage(self, _cmd) : 1;
 }
 // 方向动画 / 方向模式：同样包 idiom
 static id (*orig_defaultOrientAnim)(id, SEL, BOOL);
-static id hook_defaultOrientAnim(id self, SEL _cmd, BOOL animatable) {
+__attribute__((unused)) static id hook_defaultOrientAnim(id self, SEL _cmd, BOOL animatable) {
     if (gFakePadIdiom) gPadIdiom++;
     id r = nil;
     @try { r = orig_defaultOrientAnim ? orig_defaultOrientAnim(self, _cmd, animatable) : nil; }
@@ -633,7 +633,7 @@ static id hook_defaultOrientAnim(id self, SEL _cmd, BOOL animatable) {
     return r;
 }
 static long (*orig_orientationMode)(id, SEL);
-static long hook_orientationMode(id self, SEL _cmd) {
+__attribute__((unused)) static long hook_orientationMode(id self, SEL _cmd) {
     if (gFakePadIdiom) gPadIdiom++;
     long r = 0;
     @try { r = orig_orientationMode ? orig_orientationMode(self, _cmd) : 0; }
@@ -642,7 +642,7 @@ static long hook_orientationMode(id self, SEL _cmd) {
 }
 // 主屏手势开关
 static BOOL (*orig_homeGestureEnabled)(id, SEL);
-static BOOL hook_homeGestureEnabled(id self, SEL _cmd) {
+__attribute__((unused)) static BOOL hook_homeGestureEnabled(id self, SEL _cmd) {
     if (CardsOn() || DockOn()) return YES;
     return orig_homeGestureEnabled ? orig_homeGestureEnabled(self, _cmd) : YES;
 }
@@ -770,28 +770,14 @@ __attribute__((constructor)) static void SBXInit(void) {
         }
         if (b) {
             HookMsg("SBAppSwitcherSettings", "effectiveSwitcherStyle", (IMP)hook_switcherStyle, (IMP *)&orig_switcherStyle);
-            SBXLog(@"模式=C（只换样式， idiom 伪装=%d）", gFakePadIdiom);
+            SBXLog(@"模式=D（对齐 SystemX 原版：仅样式+尺寸/间距）");
             HookMsg("SBHomeGestureFinalDestinationSwitcherModifier", "currentFinalDestination",
                     (IMP)hook_finalDestination, (IMP *)&orig_finalDestination);
-            HookMsg("SBFullScreenSwitcherLiveContentOverlayCoordinator",
-                    "layoutStateTransitionCoordinator:transitionDidBeginWithTransitionContext:",
-                    (IMP)hook_overlayTransBegin, (IMP *)&orig_overlayTransBegin);
-            HookMsg("SBSwitcherController", "_updateContentViewControllerIfNeeded",
-                    (IMP)hook_updateContent, (IMP *)&orig_updateContent);
+            // 对齐 SystemX 原版：卡片后台只动 4 个（样式/缩放/横距/纵距）
+            // 之前的 Chamois、Traits、idiom 伪装、转场包裹全部撤掉 —— 它们是"卡片跳变"的来源
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
-            HookMsg("SBAppSwitcherSettings", "setGridSwitcherPageScale:", (IMP)hook_setGridPageScale, (IMP *)&orig_setGridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
-            HookMsg("SBAppSwitcherSettings", "setDefaultValues", (IMP)hook_setDefaultValues, (IMP *)&orig_setDefaultValues);
-            HookMsg("SBFluidSwitcherIconImageContainerView", "didMoveToWindow", (IMP)hook_iconContainerDidMove, (IMP *)&orig_iconContainerDidMove);
-            HookMsg("SBSwitcherChamoisLayoutAttributes", "setGridWidths:", (IMP)hook_setGridWidths, (IMP *)&orig_setGridWidths);
-            HookMsg("SBSwitcherChamoisLayoutAttributes", "setGridHeights:", (IMP)hook_setGridHeights, (IMP *)&orig_setGridHeights);
-            HookMsg("SBSwitcherChamoisSettings", "maximumNumberOfAppsOnStage", (IMP)hook_maxAppsOnStage, (IMP *)&orig_maxAppsOnStage);
-            HookMsg("SBTraitsPipelineManager", "defaultOrientationAnimationSettingsAnimatable:", (IMP)hook_defaultOrientAnim, (IMP *)&orig_defaultOrientAnim);
-            HookMsg("SBTraitsSceneParticipantDelegate", "_orientationMode", (IMP)hook_orientationMode, (IMP *)&orig_orientationMode);
-            HookMsg("SBHomeGestureSettings", "isHomeGestureEnabled", (IMP)hook_homeGestureEnabled, (IMP *)&orig_homeGestureEnabled);
-            HookMsg("SBFluidSwitcherViewController", "isDevicePad", (IMP)hook_isDevicePad, (IMP *)&orig_isDevicePad);
-            HookMsg("UIDevice", "userInterfaceIdiom", (IMP)hook_idiom, (IMP *)&orig_idiom);
         }
         if (c) {
             // 原版/ TrollPad 都是 hook 这个【类方法】，不是 C 函数
