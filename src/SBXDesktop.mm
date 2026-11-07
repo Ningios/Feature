@@ -506,8 +506,13 @@ static void hook_setScrollEnabled(id self, SEL _cmd, BOOL enabled) {
 static _Thread_local int gPadIdiom = 0;
 static BOOL gFakePadIdiom = NO;
 static NSInteger (*orig_idiom)(id, SEL);
-__attribute__((unused)) static NSInteger hook_idiom(id self, SEL _cmd) {
+__attribute__((unused)) __attribute__((unused)) static NSInteger hook_idiom(id self, SEL _cmd) {
     if (gPadIdiom > 0 && CardsOn()) return 2;   // UIUserInterfaceIdiomPad
+    return orig_idiom ? orig_idiom(self, _cmd) : 0;
+}
+// 卡片后台：UIDevice 全局返回 Pad（SystemX 原版就是无条件返回 2）
+static NSInteger hook_globalIdiom(id self, SEL _cmd) {
+    if (CardsOn()) return 2;                    // UIUserInterfaceIdiomPad
     return orig_idiom ? orig_idiom(self, _cmd) : 0;
 }
 
@@ -568,9 +573,7 @@ __attribute__((unused)) static void hook_iconContainerDidMove(id self, SEL _cmd)
 }
 
 static BOOL (*orig_isDevicePad)(id, SEL);
-static BOOL hook_isDevicePad(id self, SEL _cmd) {
-    // TrollPad：这个方法就是「走 iPadOS 切换动画」的总开关
-    if (CardsOn()) return YES;
+__attribute__((unused)) static BOOL hook_isDevicePad(id self, SEL _cmd) {
     return orig_isDevicePad ? orig_isDevicePad(self, _cmd) : NO;
 }
 
@@ -776,8 +779,8 @@ __attribute__((constructor)) static void SBXInit(void) {
                     (IMP)hook_finalDestination, (IMP *)&orig_finalDestination);
             // 对齐 SystemX 原版：卡片后台只动 4 个（样式/缩放/横距/纵距）
             // 之前的 Chamois、Traits、idiom 伪装、转场包裹全部撤掉 —— 它们是"卡片跳变"的来源
-            HookMsg("SBFluidSwitcherViewController", "isDevicePad", (IMP)hook_isDevicePad, (IMP *)&orig_isDevicePad);
-            SBXLog(@"已挂 SBFluidSwitcherViewController isDevicePad → YES（iPad 切换动画）");
+            HookMsg("UIDevice", "userInterfaceIdiom", (IMP)hook_globalIdiom, (IMP *)&orig_idiom);
+            SBXLog(@"已挂 UIDevice userInterfaceIdiom → Pad（卡片后台走 iPad 动画）");
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
