@@ -369,7 +369,7 @@ static void SBXAttachGlass(UIButton *b, BOOL force) {
         LGGlassButtonView *old = objc_getAssociatedObject(b, &kGlassKey);
         if (old) { [old removeFromSuperview]; objc_setAssociatedObject(b, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
     } else if (objc_getAssociatedObject(b, &kGlassKey)) return;
-    if (!SBXBool(@"clearGlass", YES)) return;
+    if (!SBXBool(@"clearGlass", NO)) return;
     UIWindow *win = b.window; if (!win) return;
     UIVisualEffectView *blur = (UIVisualEffectView *)[b viewWithTag:kBlurTag];
     CGRect inWin = [b convertRect:b.bounds toView:win];
@@ -448,6 +448,16 @@ static void (*orig_trDidEnd)(id, SEL, id, id);
 static void hook_trDidEnd(id self, SEL _cmd, id coord, id ctx) {
     if (orig_trDidEnd) orig_trDidEnd(self, _cmd, coord, ctx);
     if (ClearOn() && SBXAnySwitcherVisible()) SBXSetButtonVisible(YES);
+    if (CardsOn() && SBXAnySwitcherVisible() && !SBXHasAppLayouts()) {
+        SBXLog(@"空后台 → 自动退出");
+        Class c = NSClassFromString(@"SBMainSwitcherControllerCoordinator");
+        id coord = SBXClassCall(c, @"sharedInstanceIfExists");
+        SEL ds = NSSelectorFromString(@"dismissMainSwitcherNoninteractivelyAnimated:");
+        if (coord && [coord respondsToSelector:ds]) {
+            void (*df)(id, SEL, BOOL) = (void (*)(id, SEL, BOOL))objc_msgSend;
+            df(coord, ds, YES);
+        }
+    }
 }
 // dismiss*：先隐藏再调原实现（顺序不能反）
 static void (*orig_dismissMain)(id, SEL, BOOL);
@@ -498,6 +508,18 @@ static NSInteger hook_idiom(id self, SEL _cmd) {
     return orig_idiom ? orig_idiom(self, _cmd) : 0;
 }
 
+
+// 没有后台卡片时，不允许滑出后台（系统原生行为）；若已经是空的，直接退出
+static long (*orig_finalDestination)(id, SEL);
+static long hook_finalDestination(id self, SEL _cmd) {
+    long v = orig_finalDestination ? orig_finalDestination(self, _cmd) : 0;
+    if (CardsOn() && !SBXHasAppLayouts() && v != 0) {
+        SBXLog(@"无卡片：阻止进入后台（原目的地=%ld → 0）", v);
+        return 0;
+    }
+    return v;
+}
+
 #pragma mark - ============ B. iPad 卡片后台 ============
 // effectiveSwitcherStyle：开启时返回 2（网格）
 static long (*orig_switcherStyle)(id, SEL);
@@ -509,13 +531,12 @@ static double (*orig_gridPageScale)(id, SEL);
 static double hook_gridPageScale(id self, SEL _cmd) {
     double v = orig_gridPageScale ? orig_gridPageScale(self, _cmd) : 1.0;
     if (!CardsOn()) return v;
-    // TrollPad 的做法：iPad 网格在 iPhone 上必须缩小（它写死 0.38），这里以 0.38 为基准再乘用户倍率
-    return 0.38 * SBXNum(@"cardScale", 1.0, 0.1, 2.0);
+    return v * SBXNum(@"cardScale", 1.0, 0.1, 2.0);
 }
 // 系统若自己回写缩放，也要拦住
 static void (*orig_setGridPageScale)(id, SEL, double);
 static void hook_setGridPageScale(id self, SEL _cmd, double v) {
-    if (orig_setGridPageScale) orig_setGridPageScale(self, _cmd, CardsOn() ? 0.38 * SBXNum(@"cardScale", 1.0, 0.1, 2.0) : v);
+    if (orig_setGridPageScale) orig_setGridPageScale(self, _cmd, v);
 }
 static double (*orig_gridHSpacing)(id, SEL);
 static double hook_gridHSpacing(id self, SEL _cmd) {
@@ -672,6 +693,8 @@ __attribute__((constructor)) static void SBXInit(void) {
         }
         if (b) {
             HookMsg("SBAppSwitcherSettings", "effectiveSwitcherStyle", (IMP)hook_switcherStyle, (IMP *)&orig_switcherStyle);
+            HookMsg("SBHomeGestureFinalDestinationSwitcherModifier", "currentFinalDestination",
+                    (IMP)hook_finalDestination, (IMP *)&orig_finalDestination);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
             HookMsg("SBAppSwitcherSettings", "setGridSwitcherPageScale:", (IMP)hook_setGridPageScale, (IMP *)&orig_setGridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
