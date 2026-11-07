@@ -16,7 +16,9 @@ jobs:
       - name: Compile metallib (航的液态玻璃着色器)
         run: |
           set -eo pipefail
-          xcrun -sdk iphoneos metal -c shader/glass.metal -o /tmp/glass.air
+          # iOS 17 运行时只支持到 MSL 3.x；显式把部署目标降到 15.0（必要时退回 2.2）
+          xcrun -sdk iphoneos metal -miphoneos-version-min=15.0 -c shader/glass.metal -o /tmp/glass.air \
+            || xcrun -sdk iphoneos metal -std=ios-metal2.2 -c shader/glass.metal -o /tmp/glass.air
           xcrun -sdk iphoneos metallib /tmp/glass.air -o default.metallib
           ls -l default.metallib
 

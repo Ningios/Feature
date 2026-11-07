@@ -38,6 +38,9 @@ DL = os.path.join(tree, "Library/MobileSubstrate/DynamicLibraries")
 os.makedirs(DL, exist_ok=True)
 shutil.copyfile(os.path.join(ART, "SBXDesktop.dylib"), os.path.join(DL, "SBXDesktop.dylib"))
 os.chmod(os.path.join(DL, "SBXDesktop.dylib"), 0o755)
+# 注入配置（必须！否则 substrate 不知道要注入主库）
+shutil.copyfile(os.path.join(BASE, "SBXDesktop.plist"), os.path.join(DL, "SBXDesktop.plist"))
+os.chmod(os.path.join(DL, "SBXDesktop.plist"), 0o644)
 
 # --- 液态玻璃着色器（有就带） ---
 md = os.path.join(tree, "usr/share/glassclear")

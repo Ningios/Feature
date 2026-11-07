@@ -306,6 +306,7 @@ static UIButton *SBXMakeClearButton(void) {
 
     UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
     b.frame = CGRectMake(0, 0, w, h);
+    b.hidden = YES;
     b.tag = kSBXClearBtnTag;
     b.clipsToBounds = YES;
     b.layer.cornerRadius = r;
@@ -400,7 +401,16 @@ static void SBXLayoutClearButton(UIViewController *vc) {
         ]];
         SBXLog(@"已在切换器放置清除按钮 %.0fx%.0f 底距 %.0f", b.bounds.size.width, b.bounds.size.height, bottom);
     }
-    b.hidden = NO;
+    // 只在切换器真正可见时显示（根视图常驻窗口层级，不能无条件 NO）
+    BOOL vis = (host.window != nil) && (!host.hidden) && (host.alpha > 0.99) &&
+               (vc.viewIfLoaded != nil) && (vc.view.superview != nil);
+    b.hidden = !vis;
+    static int lastVis = -1;
+    if ((int)vis != lastVis) {
+        lastVis = (int)vis;
+        SBXLog(@"切换器可见性=%@ alpha=%.2f window=%@", vis ? @"可见" : @"隐藏",
+               host.alpha, host.window ? @"有" : @"无");
+    }
     if (b.bounds.size.width > 4) SBXAttachGlassForButton(b, host);
 }
 
@@ -522,6 +532,12 @@ __attribute__((constructor)) static void SBXInit(void) {
         // 3) iPad 悬浮 Dock
         if (dock) {
             void *sym = dlsym(RTLD_DEFAULT, "isFloatingDockSupported");
+            SBXLog(@"isFloatingDockSupported 符号=%p", sym);
+            for (NSString *cn in @[@"SBFloatingDockController", @"SBFloatingDockDefaults",
+                                   @"SBFloatingDockView", @"SBFloatingDockViewController"]) {
+                Class cc = NSClassFromString(cn);
+                SBXLog(@"  %@ 存在=%@", cn, cc ? @"YES" : @"NO");
+            }
             if (sym && gHookFunction) {
                 gHookFunction(sym, (void *)hook_isFloatingDockSupported,
                               (void **)&orig_isFloatingDockSupported);
