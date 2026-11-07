@@ -193,6 +193,8 @@ static UIButton *SBXFindClearButton(void) {
     return nil;
 }
 
+static void SBXAttachGlass(UIButton *b, BOOL force);   // 前置声明
+
 static void SBXSetClearButtonVisible(BOOL vis) {
     UIButton *b = SBXFindClearButton();
     if (!b) { SBXLog(@"清除按钮 %@（未找到按钮）", vis ? @"显示" : @"隐藏"); return; }
