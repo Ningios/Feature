@@ -654,6 +654,26 @@ __attribute__((unused)) static long hook_orientationMode(id self, SEL _cmd) {
     @finally { gPadIdiom--; }
     return r;
 }
+
+// ---- 探针：抓转场到底是谁在做 cross-dissolve ----
+static void (*orig_vcTransition)(id, SEL, id, id, double, unsigned long, id, id);
+static void hook_vcTransition(id self, SEL _cmd, id fromVC, id toVC, double dur, unsigned long opts, id anims, id comp) {
+    static int n = 0;
+    if (n++ < 6) {
+        SBXLog(@"探针 VC转场 %@ → %@ dur=%.2f opts=%#lx",
+               NSStringFromClass([fromVC class]), NSStringFromClass([toVC class]), dur, opts);
+    }
+    if (orig_vcTransition) orig_vcTransition(self, _cmd, fromVC, toVC, dur, opts, anims, comp);
+}
+static void (*orig_viewTransition)(id, SEL, id, double, unsigned long, id, id);
+static void hook_viewTransition(id self, SEL _cmd, id view, double dur, unsigned long opts, id anims, id comp) {
+    static int n = 0;
+    if (n++ < 6) {
+        SBXLog(@"探针 视图转场 %@ dur=%.2f opts=%#lx", NSStringFromClass([view class]), dur, opts);
+    }
+    if (orig_viewTransition) orig_viewTransition(self, _cmd, view, dur, opts, anims, comp);
+}
+
 // 探针：切换器内容视图何时装载
 static void (*orig_loadContent)(id, SEL, id);
 static void hook_loadContent(id self, SEL _cmd, id scene) {
@@ -801,6 +821,11 @@ __attribute__((constructor)) static void SBXInit(void) {
             HookMsg("UIDevice", "userInterfaceIdiom", (IMP)hook_globalIdiom, (IMP *)&orig_idiom);
             HookMsg("SBMainSwitcherControllerCoordinator", "_loadContentViewControllerIfNecessaryForWindowScene:",
                     (IMP)hook_loadContent, (IMP *)&orig_loadContent);
+            HookMsg("UIViewController", "transitionFromViewController:toViewController:duration:options:animations:completion:",
+                    (IMP)hook_vcTransition, (IMP *)&orig_vcTransition);
+            gHookMsgEx(object_getClass((id)[UIView class]),
+                       NSSelectorFromString(@"transitionWithView:duration:options:animations:completion:"),
+                       (IMP)hook_viewTransition, (IMP *)&orig_viewTransition);
             SBXLog(@"已挂 UIDevice userInterfaceIdiom → Pad + SBFluidSwitcherViewController isDevicePad → YES");
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
