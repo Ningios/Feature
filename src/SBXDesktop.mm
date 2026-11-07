@@ -241,6 +241,24 @@ static void SBXKillAll(void) {
         }
     }
     if (!layouts.count) { SBXLog(@"清除：卡片列表为空"); return; }
+    // 诊断：第一张卡片到底有哪些能取 bundle id 的接口
+    {
+        id first = layouts.firstObject;
+        SBXLog(@"诊断：layout 类=%@", NSStringFromClass([first class]));
+        for (NSString *sel in @[@"bundleIdentifier", @"primaryDisplayItem", @"allItems",
+                                 @"displayItems", @"itemForRole:", @"appLayoutByRole"])
+            SBXLog(@"  %@ 响应=%@", sel, [first respondsToSelector:NSSelectorFromString(sel)] ? @"YES" : @"NO");
+        id items = SBXIdCall(first, @"allItems");
+        if ([items isKindOfClass:NSArray.class] && [items count]) {
+            id it0 = [items firstObject];
+            SBXLog(@"  item 类=%@ bundleIdentifier响应=%@", NSStringFromClass([it0 class]),
+                   [it0 respondsToSelector:NSSelectorFromString(@"bundleIdentifier")] ? @"YES" : @"NO");
+            id b0 = SBXIdCall(it0, @"bundleIdentifier");
+            SBXLog(@"  item.bundleIdentifier=%@", b0 ?: @"(nil)");
+        }
+        id pd = SBXIdCall(first, @"primaryDisplayItem");
+        if (pd) SBXLog(@"  primaryDisplayItem 类=%@ bid=%@", NSStringFromClass([pd class]), SBXIdCall(pd, @"bundleIdentifier") ?: @"(nil)");
+    }
     BOOL preserve = SBXBool(@"clearPreserveNowPlaying", YES);
     NSString *nowPlaying = preserve ? SBXNowPlaying() : nil;
     NSSet *wl = nil;
@@ -260,6 +278,15 @@ static void SBXKillAll(void) {
         NSString *bid = nil;
         id v = SBXIdCall(layout, @"bundleIdentifier");
         if ([v isKindOfClass:NSString.class]) bid = v;
+        if (!bid) {
+            id items = SBXIdCall(layout, @"allItems");
+            if ([items isKindOfClass:NSArray.class]) {
+                for (id it in items) {
+                    id b = SBXIdCall(it, @"bundleIdentifier");
+                    if ([b isKindOfClass:NSString.class]) { bid = b; break; }
+                }
+            }
+        }
         if (!bid) {
             id item = SBXIdCall(layout, @"primaryDisplayItem");
             id b = SBXIdCall(item, @"bundleIdentifier");
