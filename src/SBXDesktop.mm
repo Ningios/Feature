@@ -568,8 +568,9 @@ __attribute__((unused)) static void hook_iconContainerDidMove(id self, SEL _cmd)
 }
 
 static BOOL (*orig_isDevicePad)(id, SEL);
-__attribute__((unused)) static BOOL hook_isDevicePad(id self, SEL _cmd) {
-    // 不强制（原版这本属"以 iPad 形式打开 App"功能）；网格样式靠 effectiveSwitcherStyle=2 + idiom 窗口
+static BOOL hook_isDevicePad(id self, SEL _cmd) {
+    // TrollPad：这个方法就是「走 iPadOS 切换动画」的总开关
+    if (CardsOn()) return YES;
     return orig_isDevicePad ? orig_isDevicePad(self, _cmd) : NO;
 }
 
@@ -775,6 +776,8 @@ __attribute__((constructor)) static void SBXInit(void) {
                     (IMP)hook_finalDestination, (IMP *)&orig_finalDestination);
             // 对齐 SystemX 原版：卡片后台只动 4 个（样式/缩放/横距/纵距）
             // 之前的 Chamois、Traits、idiom 伪装、转场包裹全部撤掉 —— 它们是"卡片跳变"的来源
+            HookMsg("SBFluidSwitcherViewController", "isDevicePad", (IMP)hook_isDevicePad, (IMP *)&orig_isDevicePad);
+            SBXLog(@"已挂 SBFluidSwitcherViewController isDevicePad → YES（iPad 切换动画）");
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
