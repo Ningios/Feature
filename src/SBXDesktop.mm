@@ -311,6 +311,7 @@ static void SBXKillAll(void) {
         delFn(coord, delSel, bid); killed++;
     }
     SBXLog(@"清除完成：清除 %lu 跳过 %lu（保留播放=%@）", (unsigned long)killed, (unsigned long)skipped, nowPlaying ?: @"无");
+    SBXSetButtonVisible(NO);   // 清完立刻收按钮（不等下一次布局事件）
     // 兜底：直接把切换器收起（有些卡片已不在 recentAppLayouts 里）
     for (NSString *dn in @[@"dismissAllSwitchersNoninteractivelyAnimated:",
                            @"dismissMainSwitcherNoninteractivelyAnimated:"]) {
@@ -507,7 +508,14 @@ static long hook_switcherStyle(id self, SEL _cmd) {
 static double (*orig_gridPageScale)(id, SEL);
 static double hook_gridPageScale(id self, SEL _cmd) {
     double v = orig_gridPageScale ? orig_gridPageScale(self, _cmd) : 1.0;
-    return CardsOn() ? v * SBXNum(@"cardScale", 1.0, 0.1, 2.0) : v;
+    if (!CardsOn()) return v;
+    // TrollPad 的做法：iPad 网格在 iPhone 上必须缩小（它写死 0.38），这里以 0.38 为基准再乘用户倍率
+    return 0.38 * SBXNum(@"cardScale", 1.0, 0.1, 2.0);
+}
+// 系统若自己回写缩放，也要拦住
+static void (*orig_setGridPageScale)(id, SEL, double);
+static void hook_setGridPageScale(id self, SEL _cmd, double v) {
+    if (orig_setGridPageScale) orig_setGridPageScale(self, _cmd, CardsOn() ? 0.38 * SBXNum(@"cardScale", 1.0, 0.1, 2.0) : v);
 }
 static double (*orig_gridHSpacing)(id, SEL);
 static double hook_gridHSpacing(id self, SEL _cmd) {
@@ -665,6 +673,7 @@ __attribute__((constructor)) static void SBXInit(void) {
         if (b) {
             HookMsg("SBAppSwitcherSettings", "effectiveSwitcherStyle", (IMP)hook_switcherStyle, (IMP *)&orig_switcherStyle);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
+            HookMsg("SBAppSwitcherSettings", "setGridSwitcherPageScale:", (IMP)hook_setGridPageScale, (IMP *)&orig_setGridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
             HookMsg("SBAppSwitcherSettings", "setDefaultValues", (IMP)hook_setDefaultValues, (IMP *)&orig_setDefaultValues);
