@@ -190,6 +190,10 @@ static UIButton *SBXFindButton(void) {
 static void SBXAttachGlass(UIButton *b, BOOL force);
 
 static void SBXSetButtonVisible(BOOL vis) {
+    static double lastTime = 0; static BOOL lastVis = YES;
+    double now = [NSDate date].timeIntervalSince1970;
+    if (vis == lastVis && now - lastTime < 0.4) return;    // 去抖，避免转场里反复切
+    lastTime = now; lastVis = vis;
     UIButton *b = SBXFindButton();
     if (!b) { SBXLog(@"按钮%@（未找到）", vis ? @"显示" : @"隐藏"); return; }
     if (b.hidden == !vis) { /* 状态未变 */ }
@@ -267,6 +271,17 @@ static void SBXKillAll(void) {
         delFn(coord, delSel, bid); killed++;
     }
     SBXLog(@"清除完成：清除 %lu 跳过 %lu（保留播放=%@）", (unsigned long)killed, (unsigned long)skipped, nowPlaying ?: @"无");
+    // 兜底：直接把切换器收起（有些卡片已不在 recentAppLayouts 里）
+    for (NSString *dn in @[@"dismissAllSwitchersNoninteractivelyAnimated:",
+                           @"dismissMainSwitcherNoninteractivelyAnimated:"]) {
+        SEL ds = NSSelectorFromString(dn);
+        if ([coord respondsToSelector:ds]) {
+            void (*df)(id, SEL, BOOL) = (void (*)(id, SEL, BOOL))objc_msgSend;
+            df(coord, ds, YES);
+            SBXLog(@"兜底：%@", dn);
+            break;
+        }
+    }
 }
 
 @interface SBXButtonTarget : NSObject
@@ -313,7 +328,7 @@ static void SBXAttachGlass(UIButton *b, BOOL force) {
         LGGlassButtonView *old = objc_getAssociatedObject(b, &kGlassKey);
         if (old) { [old removeFromSuperview]; objc_setAssociatedObject(b, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
     } else if (objc_getAssociatedObject(b, &kGlassKey)) return;
-    if (!SBXBool(@"clearGlass", YES)) return;
+    if (!SBXBool(@"clearGlass", NO)) return;
     UIWindow *win = b.window; if (!win) return;
     UIVisualEffectView *blur = (UIVisualEffectView *)[b viewWithTag:kBlurTag];
     CGRect inWin = [b convertRect:b.bounds toView:win];
@@ -468,8 +483,7 @@ static void hook_setDefaultValues(id self, SEL _cmd) {
 static void (*orig_iconContainerDidMove)(id, SEL);
 static void hook_iconContainerDidMove(id self, SEL _cmd) {
     if (orig_iconContainerDidMove) orig_iconContainerDidMove(self, _cmd);
-    if (CardsOn() && [self isKindOfClass:UIView.class])
-        [(UIView *)self setTransform:CGAffineTransformMakeScale(0.8, 0.8)];
+    // 原版会对图标容器做 0.8 缩放；实测卡顿明显，先不做
 }
 
 #pragma mark - ============ C. iPad 悬浮 Dock ============
@@ -604,7 +618,17 @@ __attribute__((constructor)) static void SBXInit(void) {
         }
         if (c) {
             void *sym = dlsym(RTLD_DEFAULT, "isFloatingDockSupported");
-            SBXLog(@"isFloatingDockSupported 符号=%p", sym);
+            SBXLog(@"dlsym(isFloatingDockSupported)=%p", sym);
+            if (!sym) {
+                void *(*findSym)(void *, const char *) = (void *(*)(void *, const char *))dlsym(RTLD_DEFAULT, "MSFindSymbol");
+                if (findSym) {
+                    sym = findSym(NULL, "_isFloatingDockSupported");
+                    if (!sym) sym = findSym(NULL, "isFloatingDockSupported");
+                    SBXLog(@"MSFindSymbol 结果=%p", sym);
+                } else {
+                    SBXLog(@"substrate 没有 MSFindSymbol");
+                }
+            }
             if (sym && gHookFunc) { gHookFunc(sym, (void *)hook_isFloatingDockSupported, (void **)&orig_isFloatingDockSupported); SBXLog(@"已挂 isFloatingDockSupported"); }
             HookMsg("SBFloatingDockDefaults", "recentsEnabled", (IMP)hook_recentsEnabled, (IMP *)&orig_recentsEnabled);
             HookMsg("SBFloatingDockDefaults", "setRecentsEnabled:", (IMP)hook_setRecentsEnabled, (IMP *)&orig_setRecentsEnabled);
