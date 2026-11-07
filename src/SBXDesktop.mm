@@ -501,7 +501,10 @@ static void hook_setScrollEnabled(id self, SEL _cmd, BOOL enabled) {
 
 
 #pragma mark - 假 iPad idiom（网格切换器必须，否则布局/动画半吊子）
+// C 方案：只换样式（effectiveSwitcherStyle=2 + Chamois 网格），不伪装 iPad idiom
+// 让系统按 iPhone 原生逻辑播动画，避免"啪"地跳变
 static _Thread_local int gPadIdiom = 0;
+static BOOL gFakePadIdiom = NO;
 static NSInteger (*orig_idiom)(id, SEL);
 static NSInteger hook_idiom(id self, SEL _cmd) {
     if (gPadIdiom > 0 && CardsOn()) return 2;   // UIUserInterfaceIdiomPad
@@ -574,13 +577,13 @@ static BOOL hook_isDevicePad(id self, SEL _cmd) {
 // ---- 动画：把假 iPad idiom 计数也包在这两个转场入口上（TrollPad 的做法）----
 static void (*orig_overlayTransBegin)(id, SEL, id, id);
 static void hook_overlayTransBegin(id self, SEL _cmd, id coord, id ctx) {
-    gPadIdiom++;
+    if (gFakePadIdiom) gPadIdiom++;
     @try { if (orig_overlayTransBegin) orig_overlayTransBegin(self, _cmd, coord, ctx); }
     @finally { gPadIdiom--; }
 }
 static void (*orig_updateContent)(id, SEL);
 static void hook_updateContent(id self, SEL _cmd) {
-    gPadIdiom++;
+    if (gFakePadIdiom) gPadIdiom++;
     @try { if (orig_updateContent) orig_updateContent(self, _cmd); }
     @finally { gPadIdiom--; }
 }
@@ -623,7 +626,7 @@ static unsigned long hook_maxAppsOnStage(id self, SEL _cmd) {
 // 方向动画 / 方向模式：同样包 idiom
 static id (*orig_defaultOrientAnim)(id, SEL, BOOL);
 static id hook_defaultOrientAnim(id self, SEL _cmd, BOOL animatable) {
-    gPadIdiom++;
+    if (gFakePadIdiom) gPadIdiom++;
     id r = nil;
     @try { r = orig_defaultOrientAnim ? orig_defaultOrientAnim(self, _cmd, animatable) : nil; }
     @finally { gPadIdiom--; }
@@ -631,7 +634,7 @@ static id hook_defaultOrientAnim(id self, SEL _cmd, BOOL animatable) {
 }
 static long (*orig_orientationMode)(id, SEL);
 static long hook_orientationMode(id self, SEL _cmd) {
-    gPadIdiom++;
+    if (gFakePadIdiom) gPadIdiom++;
     long r = 0;
     @try { r = orig_orientationMode ? orig_orientationMode(self, _cmd) : 0; }
     @finally { gPadIdiom--; }
@@ -767,6 +770,7 @@ __attribute__((constructor)) static void SBXInit(void) {
         }
         if (b) {
             HookMsg("SBAppSwitcherSettings", "effectiveSwitcherStyle", (IMP)hook_switcherStyle, (IMP *)&orig_switcherStyle);
+            SBXLog(@"模式=C（只换样式， idiom 伪装=%d）", gFakePadIdiom);
             HookMsg("SBHomeGestureFinalDestinationSwitcherModifier", "currentFinalDestination",
                     (IMP)hook_finalDestination, (IMP *)&orig_finalDestination);
             HookMsg("SBFullScreenSwitcherLiveContentOverlayCoordinator",
