@@ -195,7 +195,17 @@ static UIButton *SBXFindClearButton(void) {
 
 static void SBXSetClearButtonVisible(BOOL vis) {
     UIButton *b = SBXFindClearButton();
-    if (b) { b.hidden = !vis; SBXLog(@"清除按钮 %@", vis ? @"显示" : @"隐藏"); }
+    if (!b) { SBXLog(@"清除按钮 %@（未找到按钮）", vis ? @"显示" : @"隐藏"); return; }
+    b.hidden = !vis;
+    SBXLog(@"清除按钮 %@", vis ? @"显示" : @"隐藏");
+    if (vis) {
+        // 等切换器画出来再截底图（viewDidLoad 时截到的是黑的）
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.18 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            UIButton *bb = SBXFindClearButton();
+            if (bb) SBXAttachGlass(bb, YES);
+        });
+    }
 }
 
 @interface SBMediaController : NSObject
@@ -311,9 +321,15 @@ static UIButton *SBXMakeClearButton(void) {
 }
 
 // 液态玻璃（失败自动保留系统材质）
-static void SBXAttachGlass(UIButton *b) {
-    static char kGlassKey;
-    if (!b || objc_getAssociatedObject(b, &kGlassKey)) return;
+static char kGlassKey;
+static void SBXAttachGlass(UIButton *b, BOOL force) {
+    if (!b) return;
+    if (force) {
+        LGGlassButtonView *old = objc_getAssociatedObject(b, &kGlassKey);
+        if (old) { [old removeFromSuperview]; objc_setAssociatedObject(b, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    } else if (objc_getAssociatedObject(b, &kGlassKey)) {
+        return;
+    }
     if (!SBXBool(@"clearGlass", YES)) return;
     UIWindow *win = b.window; if (!win) return;
     UIVisualEffectView *blur = (UIVisualEffectView *)[b viewWithTag:0x53425832];
@@ -370,7 +386,7 @@ static void hook_vcLayout(id self, SEL _cmd) {
     if (![self isKindOfClass:UIViewController.class]) return;
     UIViewController *vc = (UIViewController *)self;
     UIButton *b = (UIButton *)[vc.view viewWithTag:kSBXClearBtnTag];
-    if (b && b.bounds.size.width > 4) SBXAttachGlass(b);
+    if (b && b.bounds.size.width > 4) SBXAttachGlass(b, NO);
 }
 
 // 显示/隐藏：协调器转场回调
@@ -405,8 +421,10 @@ static BOOL hook_isDevicePad(id self, SEL _cmd) {
 static long (*orig_switcherStyle)(id, SEL);
 static long hook_switcherStyle(id self, SEL _cmd) {
     long v = orig_switcherStyle ? orig_switcherStyle(self, _cmd) : 0;
-    if (CardsOn()) SBXLog(@"effectiveSwitcherStyle 原值=%ld", v);
-    return v;
+    if (!CardsOn()) return v;
+    static long last = -999;
+    if (v != last) { last = v; SBXLog(@"effectiveSwitcherStyle 原值=%ld → 返回 2(网格)", v); }
+    return 2;      // 2 = 网格（iPad 式卡片）
 }
 static double (*orig_gridPageScale)(id, SEL);
 static double hook_gridPageScale(id self, SEL _cmd) {
@@ -431,12 +449,12 @@ static void hook_setDefaultValues(id self, SEL _cmd) {
 static void (*orig_homeScaleApp)(id, SEL, double);
 static void hook_homeScaleApp(id self, SEL _cmd, double v) {
     if (orig_homeScaleApp) orig_homeScaleApp(self, _cmd, v);
-    if (CardsOn()) SBXLog(@"HomeScreenScaleInApplication=%.3f", v);
+    static double lastA = -1; if (CardsOn() && v != lastA) { lastA = v; SBXLog(@"HomeScreenScaleInApplication=%.3f", v); }
 }
 static void (*orig_homeScaleSw)(id, SEL, double);
 static void hook_homeScaleSw(id self, SEL _cmd, double v) {
     if (orig_homeScaleSw) orig_homeScaleSw(self, _cmd, v);
-    if (CardsOn()) SBXLog(@"HomeScreenScaleInSwitcher=%.3f", v);
+    static double lastS = -1; if (CardsOn() && v != lastS) { lastS = v; SBXLog(@"HomeScreenScaleInSwitcher=%.3f", v); }
 }
 static BOOL (*orig_gridVisible)(id, SEL);
 static BOOL hook_gridVisible(id self, SEL _cmd) {
