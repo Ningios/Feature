@@ -475,6 +475,15 @@ static void hook_setScrollEnabled(id self, SEL _cmd, BOOL enabled) {
     });
 }
 
+
+#pragma mark - 假 iPad idiom（网格切换器必须，否则布局/动画半吊子）
+static _Thread_local int gPadIdiom = 0;
+static NSInteger (*orig_idiom)(id, SEL);
+static NSInteger hook_idiom(id self, SEL _cmd) {
+    if (gPadIdiom > 0 && CardsOn()) return 2;   // UIUserInterfaceIdiomPad
+    return orig_idiom ? orig_idiom(self, _cmd) : 0;
+}
+
 #pragma mark - ============ B. iPad 卡片后台 ============
 // effectiveSwitcherStyle：开启时返回 2（网格）
 static long (*orig_switcherStyle)(id, SEL);
@@ -513,11 +522,17 @@ static void hook_iconContainerDidMove(id self, SEL _cmd) {
     // 原版会对图标容器做 0.8 缩放；实测卡顿明显，先不做
 }
 
+static BOOL (*orig_isDevicePad)(id, SEL);
+static BOOL hook_isDevicePad(id self, SEL _cmd) {
+    if (CardsOn()) return YES;
+    return orig_isDevicePad ? orig_isDevicePad(self, _cmd) : NO;
+}
+
 #pragma mark - ============ C. iPad 悬浮 Dock ============
-static BOOL (*orig_isFloatingDockSupported)(void);
-static BOOL hook_isFloatingDockSupported(void) {
+static BOOL (*orig_isFloatingDockSupportedClass)(id, SEL);
+static BOOL hook_isFloatingDockSupportedClass(id self, SEL _cmd) {
     if (DockOn()) return YES;
-    return orig_isFloatingDockSupported ? orig_isFloatingDockSupported() : NO;
+    return orig_isFloatingDockSupportedClass ? orig_isFloatingDockSupportedClass(self, _cmd) : NO;
 }
 static BOOL SBXRecentsWanted(void) {
     NSInteger c = (NSInteger)SBXNum(@"dockContent", 0, 0, 3);
@@ -642,21 +657,26 @@ __attribute__((constructor)) static void SBXInit(void) {
             HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
             HookMsg("SBAppSwitcherSettings", "setDefaultValues", (IMP)hook_setDefaultValues, (IMP *)&orig_setDefaultValues);
             HookMsg("SBFluidSwitcherIconImageContainerView", "didMoveToWindow", (IMP)hook_iconContainerDidMove, (IMP *)&orig_iconContainerDidMove);
+            HookMsg("SBFluidSwitcherViewController", "isDevicePad", (IMP)hook_isDevicePad, (IMP *)&orig_isDevicePad);
+            HookMsg("UIDevice", "userInterfaceIdiom", (IMP)hook_idiom, (IMP *)&orig_idiom);
         }
         if (c) {
-            void *sym = dlsym(RTLD_DEFAULT, "isFloatingDockSupported");
-            SBXLog(@"dlsym(isFloatingDockSupported)=%p", sym);
-            if (!sym) {
-                void *(*findSym)(void *, const char *) = (void *(*)(void *, const char *))dlsym(RTLD_DEFAULT, "MSFindSymbol");
-                if (findSym) {
-                    sym = findSym(NULL, "_isFloatingDockSupported");
-                    if (!sym) sym = findSym(NULL, "isFloatingDockSupported");
-                    SBXLog(@"MSFindSymbol 结果=%p", sym);
+            // 原版/ TrollPad 都是 hook 这个【类方法】，不是 C 函数
+            Class dockCls = objc_getClass("SBFloatingDockController");
+            if (dockCls) {
+                SEL cs = NSSelectorFromString(@"isFloatingDockSupported");
+                Method cm = class_getClassMethod(dockCls, cs);
+                if (cm) {
+                    gHookMsgEx(object_getClass((id)dockCls), cs,
+                               (IMP)hook_isFloatingDockSupportedClass,
+                               (IMP *)&orig_isFloatingDockSupportedClass);
+                    SBXLog(@"已挂类方法 +[SBFloatingDockController isFloatingDockSupported]");
                 } else {
-                    SBXLog(@"substrate 没有 MSFindSymbol");
+                    SBXLog(@"类方法不存在：+[SBFloatingDockController isFloatingDockSupported]");
                 }
+            } else {
+                SBXLog(@"类不存在：SBFloatingDockController");
             }
-            if (sym && gHookFunc) { gHookFunc(sym, (void *)hook_isFloatingDockSupported, (void **)&orig_isFloatingDockSupported); SBXLog(@"已挂 isFloatingDockSupported"); }
             HookMsg("SBFloatingDockDefaults", "recentsEnabled", (IMP)hook_recentsEnabled, (IMP *)&orig_recentsEnabled);
             HookMsg("SBFloatingDockDefaults", "setRecentsEnabled:", (IMP)hook_setRecentsEnabled, (IMP *)&orig_setRecentsEnabled);
             HookMsg("SBFloatingDockDefaults", "appLibraryEnabled", (IMP)hook_appLibraryEnabled, (IMP *)&orig_appLibraryEnabled);
