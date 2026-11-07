@@ -46,17 +46,17 @@ jobs:
               -target ${ARCH}-apple-ios15.0 -bundle \
               -framework Foundation -framework UIKit \
               -Wl,-undefined,dynamic_lookup \
-              -o SBXDesktopPrefs-${ARCH} prefs/SBXDesktopPrefs.mm
+              -o bin/SBXDesktopPrefs-${ARCH} prefs/SBXDesktopPrefs.mm
           done
-          xcrun lipo -create -output SBXDesktopPrefs SBXDesktopPrefs-arm64 SBXDesktopPrefs-arm64e
-          xcrun codesign --force --sign - SBXDesktopPrefs
-          xcrun lipo -info SBXDesktopPrefs
+          xcrun lipo -create -output bin/SBXDesktopPrefs bin/SBXDesktopPrefs-arm64 bin/SBXDesktopPrefs-arm64e
+          xcrun codesign --force --sign - bin/SBXDesktopPrefs
+          xcrun lipo -info bin/SBXDesktopPrefs
 
       - name: 校验（真 arm64e 判据 cpusubtype==0x80000002）
         run: |
           python3 - <<'EOF'
           import struct
-          for f in ("SBXDesktop.dylib", "SBXDesktopPrefs", "default.metallib"):
+          for f in ("SBXDesktop.dylib", "bin/SBXDesktopPrefs", "default.metallib"):
               try:
                   d = open(f, "rb").read()
                   magic, cputype, sub = struct.unpack_from("<III", d, 0)
@@ -72,6 +72,6 @@ jobs:
           name: feature
           path: |
             SBXDesktop.dylib
-            SBXDesktopPrefs
+            bin/SBXDesktopPrefs
             default.metallib
           if-no-files-found: error
