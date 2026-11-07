@@ -532,7 +532,11 @@ static long hook_finalDestination(id self, SEL _cmd) {
 // effectiveSwitcherStyle：开启时返回 2（网格）
 static long (*orig_switcherStyle)(id, SEL);
 static long hook_switcherStyle(id self, SEL _cmd) {
-    if (CardsOn()) return 2;
+    if (CardsOn()) {
+        static int n = 0;
+        if (n++ < 3) SBXLog(@"探针 effectiveSwitcherStyle 被问 → 答 2 (#%d)", n);
+        return 2;
+    }
     return orig_switcherStyle ? orig_switcherStyle(self, _cmd) : 0;
 }
 static double (*orig_gridPageScale)(id, SEL);
@@ -573,7 +577,13 @@ __attribute__((unused)) static void hook_iconContainerDidMove(id self, SEL _cmd)
 }
 
 static BOOL (*orig_isDevicePad)(id, SEL);
-__attribute__((unused)) static BOOL hook_isDevicePad(id self, SEL _cmd) {
+static BOOL hook_isDevicePad(id self, SEL _cmd) {
+    // 「用 iPad 的切换动画」开关（SBX 里是独立 pref）
+    if (CardsOn()) {
+        static int n = 0;
+        if (n++ < 3) SBXLog(@"探针 isDevicePad 被问 → 答 YES (#%d)", n);
+        return YES;
+    }
     return orig_isDevicePad ? orig_isDevicePad(self, _cmd) : NO;
 }
 
@@ -644,6 +654,14 @@ __attribute__((unused)) static long hook_orientationMode(id self, SEL _cmd) {
     @finally { gPadIdiom--; }
     return r;
 }
+// 探针：切换器内容视图何时装载
+static void (*orig_loadContent)(id, SEL, id);
+static void hook_loadContent(id self, SEL _cmd, id scene) {
+    static int n = 0;
+    if (n++ < 3) SBXLog(@"探针 _loadContentViewControllerIfNecessary 调用 (#%d)", n);
+    if (orig_loadContent) orig_loadContent(self, _cmd, scene);
+}
+
 // 主屏手势开关
 static BOOL (*orig_homeGestureEnabled)(id, SEL);
 __attribute__((unused)) static BOOL hook_homeGestureEnabled(id self, SEL _cmd) {
@@ -779,8 +797,11 @@ __attribute__((constructor)) static void SBXInit(void) {
                     (IMP)hook_finalDestination, (IMP *)&orig_finalDestination);
             // 对齐 SystemX 原版：卡片后台只动 4 个（样式/缩放/横距/纵距）
             // 之前的 Chamois、Traits、idiom 伪装、转场包裹全部撤掉 —— 它们是"卡片跳变"的来源
+            HookMsg("SBFluidSwitcherViewController", "isDevicePad", (IMP)hook_isDevicePad, (IMP *)&orig_isDevicePad);
             HookMsg("UIDevice", "userInterfaceIdiom", (IMP)hook_globalIdiom, (IMP *)&orig_idiom);
-            SBXLog(@"已挂 UIDevice userInterfaceIdiom → Pad（卡片后台走 iPad 动画）");
+            HookMsg("SBMainSwitcherControllerCoordinator", "_loadContentViewControllerIfNecessaryForWindowScene:",
+                    (IMP)hook_loadContent, (IMP *)&orig_loadContent);
+            SBXLog(@"已挂 UIDevice userInterfaceIdiom → Pad + SBFluidSwitcherViewController isDevicePad → YES");
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
