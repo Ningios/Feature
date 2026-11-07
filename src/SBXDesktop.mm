@@ -570,6 +570,21 @@ static BOOL hook_isDevicePad(id self, SEL _cmd) {
     return orig_isDevicePad ? orig_isDevicePad(self, _cmd) : NO;
 }
 
+
+// ---- 动画：把假 iPad idiom 计数也包在这两个转场入口上（TrollPad 的做法）----
+static void (*orig_overlayTransBegin)(id, SEL, id, id);
+static void hook_overlayTransBegin(id self, SEL _cmd, id coord, id ctx) {
+    gPadIdiom++;
+    @try { if (orig_overlayTransBegin) orig_overlayTransBegin(self, _cmd, coord, ctx); }
+    @finally { gPadIdiom--; }
+}
+static void (*orig_updateContent)(id, SEL);
+static void hook_updateContent(id self, SEL _cmd) {
+    gPadIdiom++;
+    @try { if (orig_updateContent) orig_updateContent(self, _cmd); }
+    @finally { gPadIdiom--; }
+}
+
 #pragma mark - ============ C. iPad 悬浮 Dock ============
 static BOOL (*orig_isFloatingDockSupportedClass)(id, SEL);
 static BOOL hook_isFloatingDockSupportedClass(id self, SEL _cmd) {
@@ -695,6 +710,11 @@ __attribute__((constructor)) static void SBXInit(void) {
             HookMsg("SBAppSwitcherSettings", "effectiveSwitcherStyle", (IMP)hook_switcherStyle, (IMP *)&orig_switcherStyle);
             HookMsg("SBHomeGestureFinalDestinationSwitcherModifier", "currentFinalDestination",
                     (IMP)hook_finalDestination, (IMP *)&orig_finalDestination);
+            HookMsg("SBFullScreenSwitcherLiveContentOverlayCoordinator",
+                    "layoutStateTransitionCoordinator:transitionDidBeginWithTransitionContext:",
+                    (IMP)hook_overlayTransBegin, (IMP *)&orig_overlayTransBegin);
+            HookMsg("SBSwitcherController", "_updateContentViewControllerIfNeeded",
+                    (IMP)hook_updateContent, (IMP *)&orig_updateContent);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
             HookMsg("SBAppSwitcherSettings", "setGridSwitcherPageScale:", (IMP)hook_setGridPageScale, (IMP *)&orig_setGridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
