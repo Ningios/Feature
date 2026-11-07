@@ -40,6 +40,7 @@ jobs:
       - name: Build prefs bundle executable (arm64 + arm64e)
         run: |
           set -eo pipefail
+          mkdir -p bin
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           for ARCH in arm64 arm64e; do
             xcrun --sdk iphoneos clang -fobjc-arc -O2 -isysroot "$SDK" \
