@@ -6,7 +6,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -51,6 +51,20 @@ jobs:
           xcrun lipo -create -output SBXDesktopPrefs SBXDesktopPrefs-arm64 SBXDesktopPrefs-arm64e
           xcrun codesign --force --sign - SBXDesktopPrefs
           xcrun lipo -info SBXDesktopPrefs
+
+      - name: 校验（真 arm64e 判据 cpusubtype==0x80000002）
+        run: |
+          python3 - <<'EOF'
+          import struct
+          for f in ("SBXDesktop.dylib", "SBXDesktopPrefs", "default.metallib"):
+              try:
+                  d = open(f, "rb").read()
+                  magic, cputype, sub = struct.unpack_from("<III", d, 0)
+                  print(f, hex(magic), hex(cputype), hex(sub))
+              except Exception as e:
+                  print(f, "读取失败", e)
+          EOF
+          xcrun lipo -info SBXDesktop.dylib
 
       - name: Upload
         uses: actions/upload-artifact@v4
