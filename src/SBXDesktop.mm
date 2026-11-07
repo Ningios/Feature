@@ -199,12 +199,24 @@ static void SBXSetButtonVisible(BOOL vis) {
     if (b.hidden == !vis) { /* 状态未变 */ }
     b.hidden = !vis;
     SBXLog(@"按钮%@", vis ? @"显示" : @"隐藏");
+    if (vis && !SBXHasAppLayouts()) { b.hidden = YES; SBXLog(@"没有后台卡片 → 不显示按钮"); return; }
     if (vis) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.18 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             UIButton *bb = SBXFindButton();
             if (bb) SBXAttachGlass(bb, YES);   // 显示后再截底图（viewDidLoad 时是黑的）
         });
     }
+}
+
+// 是否还有后台卡片（没有卡片时不该显示清除按钮）
+static BOOL SBXHasAppLayouts(void) {
+    id coord = SBXClassCall(NSClassFromString(@"SBMainSwitcherControllerCoordinator"), @"sharedInstanceIfExists");
+    if (!coord) return NO;
+    for (NSString *sel in @[@"recentAppLayouts", @"appLayouts", @"allItems"]) {
+        id v = SBXIdCall(coord, sel);
+        if ([v isKindOfClass:NSArray.class] && [v count] > 0) return YES;
+    }
+    return NO;
 }
 
 static BOOL SBXAnySwitcherVisible(void) {
@@ -524,7 +536,7 @@ static void hook_iconContainerDidMove(id self, SEL _cmd) {
 
 static BOOL (*orig_isDevicePad)(id, SEL);
 static BOOL hook_isDevicePad(id self, SEL _cmd) {
-    if (CardsOn()) return YES;
+    // 不强制（原版这本属"以 iPad 形式打开 App"功能）；网格样式靠 effectiveSwitcherStyle=2 + idiom 窗口
     return orig_isDevicePad ? orig_isDevicePad(self, _cmd) : NO;
 }
 
@@ -577,12 +589,11 @@ static id hook_dockWindow(id self, SEL _cmd) {
 }
 static double (*orig_translationVC)(id, SEL);
 static double hook_translationVC(id self, SEL _cmd) {
-    if (DockOn()) return 0.0;
+    // 原版仅在"正在展示文件夹"时返回 0；其余透传，保留系统滑动动画
     return orig_translationVC ? orig_translationVC(self, _cmd) : 0.0;
 }
 static double (*orig_translationCtl)(id, SEL);
 static double hook_translationCtl(id self, SEL _cmd) {
-    if (DockOn()) return 0.0;
     return orig_translationCtl ? orig_translationCtl(self, _cmd) : 0.0;
 }
 static BOOL (*orig_gesturePossible)(id, SEL);
