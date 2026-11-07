@@ -188,6 +188,7 @@ static UIButton *SBXFindButton(void) {
     return nil;
 }
 static void SBXAttachGlass(UIButton *b, BOOL force);
+static BOOL SBXHasAppLayouts(void);   // 前置声明
 
 static void SBXSetButtonVisible(BOOL vis) {
     static double lastTime = 0; static BOOL lastVis = YES;
