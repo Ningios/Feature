@@ -511,7 +511,7 @@ __attribute__((unused)) __attribute__((unused)) static NSInteger hook_idiom(id s
     return orig_idiom ? orig_idiom(self, _cmd) : 0;
 }
 // 卡片后台：UIDevice 全局返回 Pad（SystemX 原版就是无条件返回 2）
-static NSInteger hook_globalIdiom(id self, SEL _cmd) {
+__attribute__((unused)) static NSInteger hook_globalIdiom(id self, SEL _cmd) {
     if (CardsOn()) return 2;                    // UIUserInterfaceIdiomPad
     return orig_idiom ? orig_idiom(self, _cmd) : 0;
 }
@@ -519,7 +519,7 @@ static NSInteger hook_globalIdiom(id self, SEL _cmd) {
 
 // 没有后台卡片时，不允许滑出后台（系统原生行为）；若已经是空的，直接退出
 static long (*orig_finalDestination)(id, SEL);
-static long hook_finalDestination(id self, SEL _cmd) {
+__attribute__((unused)) static long hook_finalDestination(id self, SEL _cmd) {
     long v = orig_finalDestination ? orig_finalDestination(self, _cmd) : 0;
     if (CardsOn() && !SBXHasAppLayouts() && v != 0) {
         SBXLog(@"无卡片：阻止进入后台（原目的地=%ld → 0）", v);
@@ -577,7 +577,7 @@ __attribute__((unused)) static void hook_iconContainerDidMove(id self, SEL _cmd)
 }
 
 static BOOL (*orig_isDevicePad)(id, SEL);
-static BOOL hook_isDevicePad(id self, SEL _cmd) {
+__attribute__((unused)) static BOOL hook_isDevicePad(id self, SEL _cmd) {
     // 「用 iPad 的切换动画」开关（SBX 里是独立 pref）
     if (CardsOn()) {
         static int n = 0;
@@ -657,7 +657,7 @@ __attribute__((unused)) static long hook_orientationMode(id self, SEL _cmd) {
 
 // ---- 探针：抓转场到底是谁在做 cross-dissolve ----
 static void (*orig_vcTransition)(id, SEL, id, id, double, unsigned long, id, id);
-static void hook_vcTransition(id self, SEL _cmd, id fromVC, id toVC, double dur, unsigned long opts, id anims, id comp) {
+__attribute__((unused)) static void hook_vcTransition(id self, SEL _cmd, id fromVC, id toVC, double dur, unsigned long opts, id anims, id comp) {
     static int n = 0;
     if (n++ < 6) {
         SBXLog(@"探针 VC转场 %@ → %@ dur=%.2f opts=%#lx",
@@ -666,7 +666,7 @@ static void hook_vcTransition(id self, SEL _cmd, id fromVC, id toVC, double dur,
     if (orig_vcTransition) orig_vcTransition(self, _cmd, fromVC, toVC, dur, opts, anims, comp);
 }
 static void (*orig_viewTransition)(id, SEL, id, double, unsigned long, id, id);
-static void hook_viewTransition(id self, SEL _cmd, id view, double dur, unsigned long opts, id anims, id comp) {
+__attribute__((unused)) static void hook_viewTransition(id self, SEL _cmd, id view, double dur, unsigned long opts, id anims, id comp) {
     static int n = 0;
     if (n++ < 6) {
         SBXLog(@"探针 视图转场 %@ dur=%.2f opts=%#lx", NSStringFromClass([view class]), dur, opts);
@@ -674,9 +674,40 @@ static void hook_viewTransition(id self, SEL _cmd, id view, double dur, unsigned
     if (orig_viewTransition) orig_viewTransition(self, _cmd, view, dur, opts, anims, comp);
 }
 
+
+// ---- 探针：抓切换器相关图层上的动画（CALayer 层）----
+static void (*orig_addAnim)(id, SEL, id, NSString *);
+__attribute__((unused)) static void hook_addAnim(id self, SEL _cmd, id anim, NSString *key) {
+    static int n = 0;
+    if (n < 40) {
+        NSString *owner = NSStringFromClass([self class]);
+        id del = nil;
+        @try { del = [self valueForKey:@"delegate"]; } @catch (__unused NSException *e) {}
+        NSString *delCls = del ? NSStringFromClass([del class]) : @"-";
+        NSString *hay = [owner stringByAppendingString:delCls];
+        if ([hay containsString:@"Switcher"] || [hay containsString:@"Icon"] || [hay containsString:@"Card"]) {
+            n++;
+            SBXLog(@"探针 图层动画 layer=%@ delegate=%@ key=%@ cls=%@",
+                   owner, delCls, key, NSStringFromClass([anim class]));
+        }
+    }
+    if (orig_addAnim) orig_addAnim(self, _cmd, anim, key);
+}
+// 切换器内容视图出现时机 + 几何
+static void (*orig_swWillAppear)(id, SEL, BOOL);
+__attribute__((unused)) static void hook_swWillAppear(id self, SEL _cmd, BOOL animated) {
+    SBXLog(@"探针 切换器 willAppear frame=%@ alpha=%.2f", NSStringFromCGRect([self view].frame), [self view].alpha);
+    if (orig_swWillAppear) orig_swWillAppear(self, _cmd, animated);
+}
+static void (*orig_swDidAppear)(id, SEL, BOOL);
+__attribute__((unused)) static void hook_swDidAppear(id self, SEL _cmd, BOOL animated) {
+    SBXLog(@"探针 切换器 didAppear frame=%@ alpha=%.2f", NSStringFromCGRect([self view].frame), [self view].alpha);
+    if (orig_swDidAppear) orig_swDidAppear(self, _cmd, animated);
+}
+
 // 探针：切换器内容视图何时装载
 static void (*orig_loadContent)(id, SEL, id);
-static void hook_loadContent(id self, SEL _cmd, id scene) {
+__attribute__((unused)) static void hook_loadContent(id self, SEL _cmd, id scene) {
     static int n = 0;
     if (n++ < 3) SBXLog(@"探针 _loadContentViewControllerIfNecessary 调用 (#%d)", n);
     if (orig_loadContent) orig_loadContent(self, _cmd, scene);
@@ -812,21 +843,11 @@ __attribute__((constructor)) static void SBXInit(void) {
         }
         if (b) {
             HookMsg("SBAppSwitcherSettings", "effectiveSwitcherStyle", (IMP)hook_switcherStyle, (IMP *)&orig_switcherStyle);
-            SBXLog(@"模式=D（对齐 SystemX 原版：仅样式+尺寸/间距）");
-            HookMsg("SBHomeGestureFinalDestinationSwitcherModifier", "currentFinalDestination",
-                    (IMP)hook_finalDestination, (IMP *)&orig_finalDestination);
+            SBXLog(@"模式=K（极简：仅 effectiveSwitcherStyle + 缩放/间距，撤掉其余全部）");
+            // 撤掉 currentFinalDestination（SBX 无此 hook，疑似抑制转场动画）
             // 对齐 SystemX 原版：卡片后台只动 4 个（样式/缩放/横距/纵距）
             // 之前的 Chamois、Traits、idiom 伪装、转场包裹全部撤掉 —— 它们是"卡片跳变"的来源
-            HookMsg("SBFluidSwitcherViewController", "isDevicePad", (IMP)hook_isDevicePad, (IMP *)&orig_isDevicePad);
-            HookMsg("UIDevice", "userInterfaceIdiom", (IMP)hook_globalIdiom, (IMP *)&orig_idiom);
-            HookMsg("SBMainSwitcherControllerCoordinator", "_loadContentViewControllerIfNecessaryForWindowScene:",
-                    (IMP)hook_loadContent, (IMP *)&orig_loadContent);
-            HookMsg("UIViewController", "transitionFromViewController:toViewController:duration:options:animations:completion:",
-                    (IMP)hook_vcTransition, (IMP *)&orig_vcTransition);
-            gHookMsgEx(object_getClass((id)[UIView class]),
-                       NSSelectorFromString(@"transitionWithView:duration:options:animations:completion:"),
-                       (IMP)hook_viewTransition, (IMP *)&orig_viewTransition);
-            SBXLog(@"已挂 UIDevice userInterfaceIdiom → Pad + SBFluidSwitcherViewController isDevicePad → YES");
+            // 撤掉 isDevicePad / 全局 idiom（SBX 卡片功能不用它们）
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
