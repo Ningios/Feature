@@ -585,6 +585,65 @@ static void hook_updateContent(id self, SEL _cmd) {
     @finally { gPadIdiom--; }
 }
 
+
+// ---- 网格尺寸：最小值钳到 150（TrollPad：更小会崩/错位）----
+static void (*orig_setGridWidths)(id, SEL, id);
+static void hook_setGridWidths(id self, SEL _cmd, id values) {
+    if (CardsOn() && [values isKindOfClass:NSArray.class] && [values count]) {
+        NSUInteger maxValue = [[values lastObject] unsignedIntegerValue];
+        if (maxValue > 150) {
+            NSMutableArray *arr = [NSMutableArray array];
+            for (NSUInteger i = 150; i < maxValue; i += 20) [arr addObject:@(i)];
+            [arr addObject:@(maxValue)];
+            SBXLog(@"gridWidths %lu → %lu 档", (unsigned long)[values count], (unsigned long)[arr count]);
+            values = arr;
+        }
+    }
+    if (orig_setGridWidths) orig_setGridWidths(self, _cmd, values);
+}
+static void (*orig_setGridHeights)(id, SEL, id);
+static void hook_setGridHeights(id self, SEL _cmd, id values) {
+    if (CardsOn() && [values isKindOfClass:NSArray.class] && [values count]) {
+        NSUInteger maxValue = [[values lastObject] unsignedIntegerValue];
+        if (maxValue > 150) {
+            NSMutableArray *arr = [NSMutableArray array];
+            for (NSUInteger i = 150; i < maxValue; i += 20) [arr addObject:@(i)];
+            [arr addObject:@(maxValue)];
+            values = arr;
+        }
+    }
+    if (orig_setGridHeights) orig_setGridHeights(self, _cmd, values);
+}
+// 舞台 App 上限
+static unsigned long (*orig_maxAppsOnStage)(id, SEL);
+static unsigned long hook_maxAppsOnStage(id self, SEL _cmd) {
+    if (CardsOn()) return 5;
+    return orig_maxAppsOnStage ? orig_maxAppsOnStage(self, _cmd) : 1;
+}
+// 方向动画 / 方向模式：同样包 idiom
+static id (*orig_defaultOrientAnim)(id, SEL, BOOL);
+static id hook_defaultOrientAnim(id self, SEL _cmd, BOOL animatable) {
+    gPadIdiom++;
+    id r = nil;
+    @try { r = orig_defaultOrientAnim ? orig_defaultOrientAnim(self, _cmd, animatable) : nil; }
+    @finally { gPadIdiom--; }
+    return r;
+}
+static long (*orig_orientationMode)(id, SEL);
+static long hook_orientationMode(id self, SEL _cmd) {
+    gPadIdiom++;
+    long r = 0;
+    @try { r = orig_orientationMode ? orig_orientationMode(self, _cmd) : 0; }
+    @finally { gPadIdiom--; }
+    return r;
+}
+// 主屏手势开关
+static BOOL (*orig_homeGestureEnabled)(id, SEL);
+static BOOL hook_homeGestureEnabled(id self, SEL _cmd) {
+    if (CardsOn() || DockOn()) return YES;
+    return orig_homeGestureEnabled ? orig_homeGestureEnabled(self, _cmd) : YES;
+}
+
 #pragma mark - ============ C. iPad 悬浮 Dock ============
 static BOOL (*orig_isFloatingDockSupportedClass)(id, SEL);
 static BOOL hook_isFloatingDockSupportedClass(id self, SEL _cmd) {
@@ -721,6 +780,12 @@ __attribute__((constructor)) static void SBXInit(void) {
             HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
             HookMsg("SBAppSwitcherSettings", "setDefaultValues", (IMP)hook_setDefaultValues, (IMP *)&orig_setDefaultValues);
             HookMsg("SBFluidSwitcherIconImageContainerView", "didMoveToWindow", (IMP)hook_iconContainerDidMove, (IMP *)&orig_iconContainerDidMove);
+            HookMsg("SBSwitcherChamoisLayoutAttributes", "setGridWidths:", (IMP)hook_setGridWidths, (IMP *)&orig_setGridWidths);
+            HookMsg("SBSwitcherChamoisLayoutAttributes", "setGridHeights:", (IMP)hook_setGridHeights, (IMP *)&orig_setGridHeights);
+            HookMsg("SBSwitcherChamoisSettings", "maximumNumberOfAppsOnStage", (IMP)hook_maxAppsOnStage, (IMP *)&orig_maxAppsOnStage);
+            HookMsg("SBTraitsPipelineManager", "defaultOrientationAnimationSettingsAnimatable:", (IMP)hook_defaultOrientAnim, (IMP *)&orig_defaultOrientAnim);
+            HookMsg("SBTraitsSceneParticipantDelegate", "_orientationMode", (IMP)hook_orientationMode, (IMP *)&orig_orientationMode);
+            HookMsg("SBHomeGestureSettings", "isHomeGestureEnabled", (IMP)hook_homeGestureEnabled, (IMP *)&orig_homeGestureEnabled);
             HookMsg("SBFluidSwitcherViewController", "isDevicePad", (IMP)hook_isDevicePad, (IMP *)&orig_isDevicePad);
             HookMsg("UIDevice", "userInterfaceIdiom", (IMP)hook_idiom, (IMP *)&orig_idiom);
         }
