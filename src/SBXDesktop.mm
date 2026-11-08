@@ -529,27 +529,27 @@ static long hook_switcherStyle(id self, SEL _cmd) {
 static void (*orig_setGridPageScale)(id, SEL, double);
 static void hook_setGridPageScale(id self, SEL _cmd, double v) {
     if (!orig_setGridPageScale) return;
-    orig_setGridPageScale(self, _cmd, CardsOn() ? SBXNum(@"cardScale", 0.38, 0.15, 1.2) : v);
+    orig_setGridPageScale(self, _cmd, (CardsOn() && SBXBool(@"scaleCard", NO)) ? 0.38 : v);
 }
 static void (*orig_setGridVSpacingP)(id, SEL, double);
 static void hook_setGridVSpacingP(id self, SEL _cmd, double v) {
     if (!orig_setGridVSpacingP) return;
-    orig_setGridVSpacingP(self, _cmd, CardsOn() ? 65.0 * SBXNum(@"cardVSpacing", 1.0, 0.2, 2.0) : v);
+    orig_setGridVSpacingP(self, _cmd, (CardsOn() && SBXBool(@"scaleCard", NO)) ? 65.0 : v);
 }
 static void (*orig_setGridVSpacingL)(id, SEL, double);
 static void hook_setGridVSpacingL(id self, SEL _cmd, double v) {
     if (!orig_setGridVSpacingL) return;
-    orig_setGridVSpacingL(self, _cmd, CardsOn() ? 40.0 * SBXNum(@"cardVSpacing", 1.0, 0.2, 2.0) : v);
+    orig_setGridVSpacingL(self, _cmd, (CardsOn() && SBXBool(@"scaleCard", NO)) ? 40.0 : v);
 }
 static void (*orig_setGridHSpacingP)(id, SEL, double);
 static void hook_setGridHSpacingP(id self, SEL _cmd, double v) {
     if (!orig_setGridHSpacingP) return;
-    orig_setGridHSpacingP(self, _cmd, CardsOn() ? 30.0 * SBXNum(@"cardHSpacing", 1.0, 0.2, 2.0) : v);
+    orig_setGridHSpacingP(self, _cmd, (CardsOn() && SBXBool(@"scaleCard", NO)) ? 30.0 : v);
 }
 static void (*orig_setGridHSpacingL)(id, SEL, double);
 static void hook_setGridHSpacingL(id self, SEL _cmd, double v) {
     if (!orig_setGridHSpacingL) return;
-    orig_setGridHSpacingL(self, _cmd, CardsOn() ? 10.0 * SBXNum(@"cardHSpacing", 1.0, 0.2, 2.0) : v);
+    orig_setGridHSpacingL(self, _cmd, (CardsOn() && SBXBool(@"scaleCard", NO)) ? 10.0 : v);
 }
 
 // ---- 标题被截断的修正（TrollPad 原样）----
