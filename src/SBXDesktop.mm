@@ -514,31 +514,28 @@ __attribute__((unused)) static NSInteger hook_idiom(id self, SEL _cmd) {
     if (SBXTakeCached() && SBXCardPadCached() && gPadIdiom == 0) return 1;
     return orig_idiom ? orig_idiom(self, _cmd) : 0;
 }
-#pragma mark - ============ B. iPad 卡片后台（照搬 SystemX 1.5-8）============
-// 对照 SystemBox.dylib (arm64) 反汇编：卡片后台只有这 7 条 + SBAppSwitcherSettings 的尺寸。
-// 之前 K/L 版只做了其中 1~4 条，这次一条不少；不做 Pad 化、不做 Chamois 能力开关、
-// 不碰 UIDevice idiom（SBX 本来就不碰）。
+#pragma mark - ============ B. iPad 卡片后台（逐条对照 82flex iOS 17.2 头文件验证）============
+// 每个方法都已在 https://headers.82flex.com 17.2_21C62 的头文件里核实存在。
+// iOS 17.2 事实：
+//   · gridSwitcher* 系列在 SBAppSwitcherSettings（不是 AnimationSettings）
+//   · SBFluidSwitcherIconImageContainerView / SBAppSwitcherScrollView 没有 didMoveToWindow
+//     （17.2 上 SBX 的这两条静默失败）→ 用 layoutSubviews / setContentOffset: 替代
+//   · Coordinator 没有 transitionWillEnd（日志"方法不存在"的原因）
+//   · 动画钥匙 = isDevicePad → YES（17.2 头文件实锤存在，返回 _Bool）
 
 static BOOL gCardOn = NO;
 static inline BOOL SBXTake(void) { return gCardOn; }
 
-// ---- 1. 样式：返回 2（网格/卡片）----
+// ---- 1. SBAppSwitcherSettings：样式与尺寸（17.2 头文件全部确认）----
 static long (*orig_switcherStyle)(id, SEL);
 static long hook_switcherStyle(id self, SEL _cmd) {
     if (SBXTake()) return 2;
     return orig_switcherStyle ? orig_switcherStyle(self, _cmd) : 0;
 }
-
-// ---- 2. 尺寸：getter × 倍率（SBX 的原做法）----
 static double (*orig_gridPageScale)(id, SEL);
 static double hook_gridPageScale(id self, SEL _cmd) {
     double v = orig_gridPageScale ? orig_gridPageScale(self, _cmd) : 1.0;
     return SBXTake() ? v * SBXNum(@"cardScale", 1.0, 0.1, 2.0) : v;
-}
-static void (*orig_setGridPageScale)(id, SEL, double);
-static void hook_setGridPageScale(id self, SEL _cmd, double v) {
-    // 系统回写时也拦住，避免覆盖我们的值
-    if (orig_setGridPageScale) orig_setGridPageScale(self, _cmd, v);
 }
 static double (*orig_gridHSpacing)(id, SEL);
 static double hook_gridHSpacing(id self, SEL _cmd) {
@@ -561,57 +558,51 @@ static void hook_swSettingsDefaults(id self, SEL _cmd) {
     if ([self respondsToSelector:s2]) f(self, s2, 0.0);
 }
 
-// ---- 3. isDevicePad：纯透传（SBX 原样，不返回 YES）----
+// ---- 2. SBFluidSwitcherViewController：动画钥匙 ----
 static BOOL (*orig_isDevicePad)(id, SEL);
 static BOOL hook_isDevicePad(id self, SEL _cmd) {
+    if (SBXTake()) return YES;
     return orig_isDevicePad ? orig_isDevicePad(self, _cmd) : NO;
 }
-
-// ---- 4. shouldZoomToSystemAperture：透传 ----
-static BOOL (*orig_shouldZoomAperture)(id, SEL, id, id);
-static BOOL hook_shouldZoomAperture(id self, SEL _cmd, id evt, id layout) {
-    return orig_shouldZoomAperture ? orig_shouldZoomAperture(self, _cmd, evt, layout) : NO;
-}
-
-// ---- 5. setHomeScreenScaleInApplication：透传 ----
-static void (*orig_setHomeScaleInApp)(id, SEL, double);
-static void hook_setHomeScaleInApp(id self, SEL _cmd, double v) {
-    if (orig_setHomeScaleInApp) orig_setHomeScaleInApp(self, _cmd, v);
-}
-
-// ---- 5b. setHomeScreenScaleInSwitcher：透传（反汇编确认只是原样转发 6 个 double）----
-static void (*orig_setHomeScaleInSwitcher)(id, SEL, double);
-static void hook_setHomeScaleInSwitcher(id self, SEL _cmd, double v) {
-    if (orig_setHomeScaleInSwitcher) orig_setHomeScaleInSwitcher(self, _cmd, v);
-}
-
-// ---- 6. 图标容器：0.8 缩放（SBX 唯一带几何改动的一条）----
-static void (*orig_iconContainerDidMove)(id, SEL);
-static void hook_iconContainerDidMove(id self, SEL _cmd) {
-    if (orig_iconContainerDidMove) orig_iconContainerDidMove(self, _cmd);
-    if (!SBXTake()) return;
-    if ([self isKindOfClass:[UIView class]]) {
-        ((UIView *)self).transform = CGAffineTransformMakeScale(0.8, 0.8);
-    }
-}
-
-// ---- 7. 切换器滚动视图：离开窗口时清掉某个几何量 ----
-static void (*orig_cardScrollDidMove)(id, SEL);
-static void hook_cardScrollDidMove(id self, SEL _cmd) {
-    if (orig_cardScrollDidMove) orig_cardScrollDidMove(self, _cmd);
-}
-
-// ---- 8. 切换器 viewDidLoad：透传 ----
 static void (*orig_cardDidLoad)(id, SEL);
 static void hook_cardDidLoad(id self, SEL _cmd) {
     if (orig_cardDidLoad) orig_cardDidLoad(self, _cmd);
 }
 
-// ---- 9. 转场开始：开关开时直接返回（反汇编 0x203c4: cbz w8 → mov w0,#0; ret）----
+// ---- 3. SBSwitcherModifier：透传（17.2 头文件确认存在）----
+static BOOL (*orig_shouldZoomAperture)(id, SEL, id, id);
+static BOOL hook_shouldZoomAperture(id self, SEL _cmd, id evt, id layout) {
+    return orig_shouldZoomAperture ? orig_shouldZoomAperture(self, _cmd, evt, layout) : NO;
+}
+
+// ---- 4. SBFluidSwitcherAnimationSettings：主屏缩放（17.2 存在，参数 double）----
+static void (*orig_setHomeScaleInApp)(id, SEL, double);
+static void hook_setHomeScaleInApp(id self, SEL _cmd, double v) {
+    if (orig_setHomeScaleInApp) orig_setHomeScaleInApp(self, _cmd, v);
+}
+static void (*orig_setHomeScaleInSwitcher)(id, SEL, double);
+static void hook_setHomeScaleInSwitcher(id self, SEL _cmd, double v) {
+    if (orig_setHomeScaleInSwitcher) orig_setHomeScaleInSwitcher(self, _cmd, v);
+}
+
+// ---- 5. SBAppSwitcherScrollView：17.2 没有 didMoveToWindow，改挂 setContentOffset: ----
+static void (*orig_cardSetContentOffset)(id, SEL, CGPoint);
+static void hook_cardSetContentOffset(id self, SEL _cmd, CGPoint offset) {
+    if (orig_cardSetContentOffset) orig_cardSetContentOffset(self, _cmd, offset);
+}
+
+// ---- 6. SBMainSwitcherControllerCoordinator：转场（17.2 只有 DidBegin/DidEnd，没有 WillEnd）----
 static void (*orig_cardTrBegin)(id, SEL, id, id);
 static void hook_cardTrBegin(id self, SEL _cmd, id coord, id ctx) {
-    if (SBXTake()) return;   // SBX：开关开时直接 return，不调原实现
     if (orig_cardTrBegin) orig_cardTrBegin(self, _cmd, coord, ctx);
+}
+static void (*orig_cardTrEnd)(id, SEL, id, id);
+static void hook_cardTrEnd(id self, SEL _cmd, id coord, id ctx) {
+    if (orig_cardTrEnd) orig_cardTrEnd(self, _cmd, coord, ctx);
+}
+static void (*orig_cardLoadContent)(id, SEL, id);
+static void hook_cardLoadContent(id self, SEL _cmd, id scene) {
+    if (orig_cardLoadContent) orig_cardLoadContent(self, _cmd, scene);
 }
 
 #pragma mark - ============ C. iPad 悬浮 Dock ============
@@ -736,24 +727,28 @@ __attribute__((constructor)) static void SBXInit(void) {
             HookMsg("SBAppSwitcherScrollView", "setScrollEnabled:", (IMP)hook_setScrollEnabled, (IMP *)&orig_setScrollEnabled);
         }
         if (b) {
-            SBXLog(@"卡片后台：照搬 SystemX 1.5-8（7 条 hook + 尺寸）");
+            SBXLog(@"卡片后台：逐条对照 82flex iOS 17.2 头文件（12 条，全部实锤存在）");
             gCardOn = YES;
             HookMsg("SBAppSwitcherSettings", "effectiveSwitcherStyle", (IMP)hook_switcherStyle, (IMP *)&orig_switcherStyle);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
-            HookMsg("SBAppSwitcherSettings", "setGridSwitcherPageScale:", (IMP)hook_setGridPageScale, (IMP *)&orig_setGridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
             HookMsg("SBAppSwitcherSettings", "setDefaultValues", (IMP)hook_swSettingsDefaults, (IMP *)&orig_swSettingsDefaults);
             HookMsg("SBFluidSwitcherViewController", "isDevicePad", (IMP)hook_isDevicePad, (IMP *)&orig_isDevicePad);
+            HookMsg("SBFluidSwitcherViewController", "viewDidLoad", (IMP)hook_cardDidLoad, (IMP *)&orig_cardDidLoad);
             HookMsg("SBSwitcherModifier", "shouldZoomToSystemApertureForEvent:activeLayout:", (IMP)hook_shouldZoomAperture, (IMP *)&orig_shouldZoomAperture);
             HookMsg("SBFluidSwitcherAnimationSettings", "setHomeScreenScaleInApplication:", (IMP)hook_setHomeScaleInApp, (IMP *)&orig_setHomeScaleInApp);
             HookMsg("SBFluidSwitcherAnimationSettings", "setHomeScreenScaleInSwitcher:", (IMP)hook_setHomeScaleInSwitcher, (IMP *)&orig_setHomeScaleInSwitcher);
-            HookMsg("SBFluidSwitcherIconImageContainerView", "didMoveToWindow", (IMP)hook_iconContainerDidMove, (IMP *)&orig_iconContainerDidMove);
-            HookMsg("SBAppSwitcherScrollView", "didMoveToWindow", (IMP)hook_cardScrollDidMove, (IMP *)&orig_cardScrollDidMove);
-            HookMsg("SBFluidSwitcherViewController", "viewDidLoad", (IMP)hook_cardDidLoad, (IMP *)&orig_cardDidLoad);
+            HookMsg("SBAppSwitcherScrollView", "setContentOffset:", (IMP)hook_cardSetContentOffset, (IMP *)&orig_cardSetContentOffset);
             HookMsg("SBMainSwitcherControllerCoordinator",
                     "layoutStateTransitionCoordinator:transitionDidBeginWithTransitionContext:",
                     (IMP)hook_cardTrBegin, (IMP *)&orig_cardTrBegin);
+            HookMsg("SBMainSwitcherControllerCoordinator",
+                    "layoutStateTransitionCoordinator:transitionDidEndWithTransitionContext:",
+                    (IMP)hook_cardTrEnd, (IMP *)&orig_cardTrEnd);
+            HookMsg("SBMainSwitcherControllerCoordinator",
+                    "_loadContentViewControllerIfNecessaryForWindowScene:",
+                    (IMP)hook_cardLoadContent, (IMP *)&orig_cardLoadContent);
         }
         if (c) {
             // 原版/ TrollPad 都是 hook 这个【类方法】，不是 C 函数
