@@ -533,7 +533,7 @@ static long hook_switcherStyle(id self, SEL _cmd) {
 static double (*orig_gridPageScale)(id, SEL);
 static double hook_gridPageScale(id self, SEL _cmd) {
     double v = orig_gridPageScale ? orig_gridPageScale(self, _cmd) : 1.0;
-    return SBXTake() ? v * SBXNum(@"cardScaleVal", 1.0, 0.1, 2.0) : v;
+    return SBXTake() ? v * SBXNum(@"cardScale", 1.0, 0.1, 2.0) : v;
 }
 static void (*orig_setGridPageScale)(id, SEL, double);
 static void hook_setGridPageScale(id self, SEL _cmd, double v) {
@@ -599,11 +599,6 @@ static void hook_iconContainerDidMove(id self, SEL _cmd) {
 static void (*orig_cardScrollDidMove)(id, SEL);
 static void hook_cardScrollDidMove(id self, SEL _cmd) {
     if (orig_cardScrollDidMove) orig_cardScrollDidMove(self, _cmd);
-    if (!SBXTake()) return;
-    if ([self isKindOfClass:[UIView class]]) {
-        // 反汇编：开关开时把 contentOffset 归零，避免卡片错位
-        ((UIScrollView *)self).contentOffset = CGPointZero;
-    }
 }
 
 // ---- 8. 切换器 viewDidLoad：透传 ----
