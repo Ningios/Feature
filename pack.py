@@ -6,7 +6,7 @@ import os, shutil, subprocess, hashlib, sys
 
 BASE = "/var/minis/shared/sbx-split/desktop"
 ART  = sys.argv[1] if len(sys.argv) > 1 else "/tmp/build_local"
-OUT  = "/var/minis/attachments/Feature-1.0.0-P_iphoneos-arm64e.deb"
+OUT  = "/var/minis/attachments/Feature-1.0.0-R_iphoneos-arm64e.deb"
 W    = "/tmp/feature-pack"
 
 shutil.rmtree(W, ignore_errors=True)
@@ -21,6 +21,8 @@ for f in ("Info.plist", "Root.plist", "Whitelist.plist"):
     shutil.copyfile(os.path.join(BASE, "prefs", f), os.path.join(PB, f))
     os.chmod(os.path.join(PB, f), 0o644)
 _pe = os.path.join(ART, "SBXDesktopPrefs")
+if not os.path.exists(_pe):
+    _pe = os.path.join(ART, "bin", "SBXDesktopPrefs")
 if os.path.exists(_pe):
     shutil.copyfile(_pe, os.path.join(PB, "SBXDesktopPrefs"))
     os.chmod(os.path.join(PB, "SBXDesktopPrefs"), 0o755)
