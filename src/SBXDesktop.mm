@@ -710,32 +710,17 @@ __attribute__((unused)) static void hook_swDidAppear(id self, SEL _cmd, BOOL ani
 }
 
 
-// ---- 卡片后台：切换器出现时的缩放淡入动画 ----
-static void (*orig_swAnimWillAppear)(id, SEL, BOOL);
-static void hook_swAnimWillAppear(id self, SEL _cmd, BOOL animated) {
-    if (orig_swAnimWillAppear) orig_swAnimWillAppear(self, _cmd, animated);
-    if (!CardsOn()) return;
-    UIView *v = [(UIViewController *)self view];
-    if (!v) return;
-    v.transform = CGAffineTransformMakeScale(0.92, 0.92);
-    v.alpha = 0.0;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [UIView animateWithDuration:0.34 delay:0
-             usingSpringWithDamping:0.86 initialSpringVelocity:0
-                          options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
-                       animations:^{
-            v.transform = CGAffineTransformIdentity;
-            v.alpha = 1.0;
-        } completion:nil];
-    });
+// ---- 转场动画参数（SwitCherish 同款：主屏 0.75 / 壁纸 0.5 / 模糊 0.4）----
+#define SBX_ANIM_SETTER(name, fixed) \
+static void (*orig_##name)(id, SEL, double); \
+static void hook_##name(id self, SEL _cmd, double v) { \
+    if (orig_##name) orig_##name(self, _cmd, CardsOn() ? (fixed) : v); \
 }
-static void (*orig_swAnimDidDisappear)(id, SEL, BOOL);
-static void hook_swAnimDidDisappear(id self, SEL _cmd, BOOL animated) {
-    if (orig_swAnimDidDisappear) orig_swAnimDidDisappear(self, _cmd, animated);
-    UIView *v = [(UIViewController *)self view];
-    v.transform = CGAffineTransformIdentity;
-    v.alpha = 1.0;
-}
+SBX_ANIM_SETTER(sethsScaleSwitcher, 0.75)
+SBX_ANIM_SETTER(sethsScaleApp,      0.75)
+SBX_ANIM_SETTER(setwpScaleSwitcher, 0.5)
+SBX_ANIM_SETTER(setwpScaleApp,      0.5)
+SBX_ANIM_SETTER(sethsBlurSwitcher,  0.4)
 
 // 探针：切换器内容视图何时装载
 static void (*orig_loadContent)(id, SEL, id);
@@ -879,10 +864,15 @@ __attribute__((constructor)) static void SBXInit(void) {
             // 撤掉 currentFinalDestination（SBX 无此 hook，疑似抑制转场动画）
             // 对齐 SystemX 原版：卡片后台只动 4 个（样式/缩放/横距/纵距）
             // 之前的 Chamois、Traits、idiom 伪装、转场包裹全部撤掉 —— 它们是"卡片跳变"的来源
-
-            HookMsg("SBFluidSwitcherViewController", "viewWillAppear:", (IMP)hook_swAnimWillAppear, (IMP *)&orig_swAnimWillAppear);
-            HookMsg("SBFluidSwitcherViewController", "viewDidDisappear:", (IMP)hook_swAnimDidDisappear, (IMP *)&orig_swAnimDidDisappear);
-            SBXLog(@"已挂 切换器缩放淡入动画（0.92 → 1.0，0.34s 弹簧）");
+            // SBX 同款：卡片里的图标容器缩到 0.8
+            HookMsg("SBFluidSwitcherIconImageContainerView", "didMoveToWindow",
+                    (IMP)hook_iconContainerDidMove, (IMP *)&orig_iconContainerDidMove);
+            HookMsg("SBFluidSwitcherAnimationSettings", "setHomeScreenScaleInSwitcher:",     (IMP)hook_sethsScaleSwitcher, (IMP *)&orig_sethsScaleSwitcher);
+            HookMsg("SBFluidSwitcherAnimationSettings", "setHomeScreenScaleInApplication:",  (IMP)hook_sethsScaleApp,      (IMP *)&orig_sethsScaleApp);
+            HookMsg("SBFluidSwitcherAnimationSettings", "setWallpaperScaleInSwitcher:",      (IMP)hook_setwpScaleSwitcher, (IMP *)&orig_setwpScaleSwitcher);
+            HookMsg("SBFluidSwitcherAnimationSettings", "setWallpaperScaleInApplication:",   (IMP)hook_setwpScaleApp,      (IMP *)&orig_setwpScaleApp);
+            HookMsg("SBFluidSwitcherAnimationSettings", "setHomeScreenBlurInSwitcher:",      (IMP)hook_sethsBlurSwitcher,  (IMP *)&orig_sethsBlurSwitcher);
+            SBXLog(@"已挂转场动画参数：主屏 0.75 / 壁纸 0.5 / 模糊 0.4");
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
