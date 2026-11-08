@@ -573,7 +573,11 @@ __attribute__((unused)) static void hook_setDefaultValues(id self, SEL _cmd) {
 static void (*orig_iconContainerDidMove)(id, SEL);
 __attribute__((unused)) static void hook_iconContainerDidMove(id self, SEL _cmd) {
     if (orig_iconContainerDidMove) orig_iconContainerDidMove(self, _cmd);
-    // 原版会对图标容器做 0.8 缩放；实测卡顿明显，先不做
+    // SystemX 原版：卡片里的 App 图标容器缩到 0.8（CoreAnimation 隐式动画 1.0 → 0.8）
+    if (!CardsOn()) return;
+    if ([self isKindOfClass:[UIView class]]) {
+        ((UIView *)self).transform = CGAffineTransformMakeScale(0.8, 0.8);
+    }
 }
 
 static BOOL (*orig_isDevicePad)(id, SEL);
@@ -847,7 +851,9 @@ __attribute__((constructor)) static void SBXInit(void) {
             // 撤掉 currentFinalDestination（SBX 无此 hook，疑似抑制转场动画）
             // 对齐 SystemX 原版：卡片后台只动 4 个（样式/缩放/横距/纵距）
             // 之前的 Chamois、Traits、idiom 伪装、转场包裹全部撤掉 —— 它们是"卡片跳变"的来源
-            // 撤掉 isDevicePad / 全局 idiom（SBX 卡片功能不用它们）
+            // SBX 同款：卡片里的图标容器缩到 0.8
+            HookMsg("SBFluidSwitcherIconImageContainerView", "didMoveToWindow",
+                    (IMP)hook_iconContainerDidMove, (IMP *)&orig_iconContainerDidMove);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
