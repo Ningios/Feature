@@ -510,7 +510,8 @@ static NSInteger hook_idiom(id self, SEL _cmd) {
     // TrollPadEx 的做法：平时就是 Pad(1)，只在被包裹的转场入口内退回 Phone
     // 注意 UIUserInterfaceIdiomPad == 1（不是 2，2 是 TV）
     extern BOOL SBXTakeCached(void);
-    if (SBXTakeCached() && gPadIdiom == 0) return 1;
+    extern BOOL SBXCardPadCached(void);
+    if (SBXTakeCached() && SBXCardPadCached() && gPadIdiom == 0) return 1;
     return orig_idiom ? orig_idiom(self, _cmd) : 0;
 }
 #pragma mark - ============ B. iPad 卡片后台（照 TrollPadEx 2.0.5 的 118 条 hook）============
@@ -522,8 +523,9 @@ static NSInteger hook_idiom(id self, SEL _cmd) {
 
 // ---- 开关 ----
 static BOOL gCardOn = NO;
-BOOL SBXTakeCached(void) { return gCardOn; }    // 主开关（SBXInit 时读一次，避免热路径读偏好）
 static BOOL gCardPad = NO;   // 全局 Pad 化
+BOOL SBXTakeCached(void) { return gCardOn; }
+BOOL SBXCardPadCached(void) { return gCardPad; }    // 主开关（SBXInit 时读一次，避免热路径读偏好）
 static BOOL SBXCardPad(void) { return gCardPad; }
 static inline BOOL SBXTake(void) { return gCardOn; }
 
