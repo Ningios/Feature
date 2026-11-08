@@ -511,50 +511,26 @@ static NSInteger hook_idiom(id self, SEL _cmd) {
     if (gPadIdiom > 0) return 2;   // UIUserInterfaceIdiomPad
     return orig_idiom ? orig_idiom(self, _cmd) : 0;
 }
-// 卡片后台：UIDevice 全局返回 Pad（SystemX 原版就是无条件返回 2）
-__attribute__((unused)) static NSInteger hook_globalIdiom(id self, SEL _cmd) {
-    if (CardsOn()) return 2;                    // UIUserInterfaceIdiomPad
-    return orig_idiom ? orig_idiom(self, _cmd) : 0;
-}
+#pragma mark - ============ B. iPad 卡片后台（整段照搬 TrollPad / TweakSB.x）============
+// 本段每一条 hook、每一个数值都来自 khanhuytran0/TrollPad 的 TweakSB.x，不做额外加工。
+// 与之前 SBX 版本的差别：
+//   1) 卡片缩放/间距用 **setter 硬改写**（0.38 / 65·40 / 30·10），不是倍率
+//   2) 能力函数只挂 1 个（外接显示），不开 Chamois/Windowed（开了会让整机变 iPad 布局）
+//   3) idiom 只在几个转场入口内临时伪装，出入口即恢复
 
-
-// 没有后台卡片时，不允许滑出后台（系统原生行为）；若已经是空的，直接退出
-static long (*orig_finalDestination)(id, SEL);
-__attribute__((unused)) static long hook_finalDestination(id self, SEL _cmd) {
-    long v = orig_finalDestination ? orig_finalDestination(self, _cmd) : 0;
-    if (CardsOn() && !SBXHasAppLayouts() && v != 0) {
-        SBXLog(@"无卡片：阻止进入后台（原目的地=%ld → 0）", v);
-        return 0;
-    }
-    return v;
-}
-
-#pragma mark - ============ B. iPad 卡片后台 ============
-// effectiveSwitcherStyle：开启时返回 2（网格）
 static long (*orig_switcherStyle)(id, SEL);
 static long hook_switcherStyle(id self, SEL _cmd) {
-    if (CardsOn()) {
-        static int n = 0;
-        if (n++ < 3) SBXLog(@"探针 effectiveSwitcherStyle 被问 → 答 2 (#%d)", n);
-        return 2;
-    }
+    // TrollPad: - (NSInteger)effectiveSwitcherStyle { return 2; }
+    if (CardsOn()) return 2;
     return orig_switcherStyle ? orig_switcherStyle(self, _cmd) : 0;
 }
-// —— 机制照 TrollPad：hook **setter**，把系统要写入的值直接换成固定值 ——
-// （SBX 是 hook getter 做倍率，默认 1 = 完全没缩放，所以它的卡片贴满屏宽；
-//   TrollPad 是 setter 硬改写 0.38，卡片才明显缩小、四周留白）
-// 原值：卡片 0.38 / 垂直间距 65·40 / 水平间距 30·10
-static double (*orig_gridPageScale)(id, SEL);
-__attribute__((unused)) static double hook_gridPageScale(id self, SEL _cmd) {
-    double v = orig_gridPageScale ? orig_gridPageScale(self, _cmd) : 1.0;
-    return CardsOn() ? SBXNum(@"cardScale", 0.38, 0.15, 1.2) : v;
-}
+
+// ---- 卡片尺寸 / 间距 ----
 static void (*orig_setGridPageScale)(id, SEL, double);
 static void hook_setGridPageScale(id self, SEL _cmd, double v) {
     if (!orig_setGridPageScale) return;
     orig_setGridPageScale(self, _cmd, CardsOn() ? SBXNum(@"cardScale", 0.38, 0.15, 1.2) : v);
 }
-// 垂直间距：竖屏 65 / 横屏 40
 static void (*orig_setGridVSpacingP)(id, SEL, double);
 static void hook_setGridVSpacingP(id self, SEL _cmd, double v) {
     if (!orig_setGridVSpacingP) return;
@@ -565,7 +541,6 @@ static void hook_setGridVSpacingL(id self, SEL _cmd, double v) {
     if (!orig_setGridVSpacingL) return;
     orig_setGridVSpacingL(self, _cmd, CardsOn() ? 40.0 * SBXNum(@"cardVSpacing", 1.0, 0.2, 2.0) : v);
 }
-// 水平间距：竖屏 30 / 横屏 10
 static void (*orig_setGridHSpacingP)(id, SEL, double);
 static void hook_setGridHSpacingP(id self, SEL _cmd, double v) {
     if (!orig_setGridHSpacingP) return;
@@ -576,9 +551,12 @@ static void hook_setGridHSpacingL(id self, SEL _cmd, double v) {
     if (!orig_setGridHSpacingL) return;
     orig_setGridHSpacingL(self, _cmd, CardsOn() ? 10.0 * SBXNum(@"cardHSpacing", 1.0, 0.2, 2.0) : v);
 }
-static void (*orig_setDefaultValues)(id, SEL);
-__attribute__((unused)) static void hook_setDefaultValues(id self, SEL _cmd) {
-    if (orig_setDefaultValues) orig_setDefaultValues(self, _cmd);
+
+// ---- 标题被截断的修正（TrollPad 原样）----
+static void (*orig_swSettingsDefaults)(id, SEL);
+static void hook_swSettingsDefaults(id self, SEL _cmd) {
+    if (!orig_swSettingsDefaults) return;
+    orig_swSettingsDefaults(self, _cmd);
     if (!CardsOn()) return;
     void (*f)(id, SEL, double) = (void (*)(id, SEL, double))objc_msgSend;
     SEL s1 = NSSelectorFromString(@"setSpacingBetweenLeadingEdgeAndIcon:");
@@ -586,119 +564,23 @@ __attribute__((unused)) static void hook_setDefaultValues(id self, SEL _cmd) {
     if ([self respondsToSelector:s1]) f(self, s1, 0.0);
     if ([self respondsToSelector:s2]) f(self, s2, 0.0);
 }
-static void (*orig_iconContainerDidMove)(id, SEL);
-__attribute__((unused)) static void hook_iconContainerDidMove(id self, SEL _cmd) {
-    if (orig_iconContainerDidMove) orig_iconContainerDidMove(self, _cmd);
-    // SystemX 原版：卡片里的 App 图标容器缩到 0.8（CoreAnimation 隐式动画 1.0 → 0.8）
-    if (!CardsOn()) return;
-    if ([self isKindOfClass:[UIView class]]) {
-        ((UIView *)self).transform = CGAffineTransformMakeScale(0.8, 0.8);
-    }
-}
 
-static BOOL (*orig_isDevicePad)(id, SEL);
-__attribute__((unused)) static BOOL hook_isDevicePad(id self, SEL _cmd) {
-    // 「用 iPad 的切换动画」开关（SBX 里是独立 pref）
-    if (CardsOn()) {
-        static int n = 0;
-        if (n++ < 3) SBXLog(@"探针 isDevicePad 被问 → 答 YES (#%d)", n);
-        return YES;
-    }
-    return orig_isDevicePad ? orig_isDevicePad(self, _cmd) : NO;
-}
-
-#pragma mark - ============ B2. iPad 多任务能力开关（TrollPadEx 的 C 函数 hook）============
-// 这才是「iPad 卡片后台」的真正钥匙，不是任何样式参数：
-//   SpringBoardFoundation 里那组能力函数返回 1 之后，SpringBoard 才会去建
-//   Chamois / 连续曝光 / Stage Manager 那一整套 iPad 转场管线。
-// TrollPad(原版) 只挂 1 个（外接显示），TrollPadEx 扩到 6 个。
-static void *gSBFHandle = NULL;
-static int SBXReturnOne(void) { return 1; }
-
-static void SBXHookCFunc(const char *name) {
-    void *sym = gSBFHandle ? dlsym(gSBFHandle, name) : NULL;
-    if (!sym) sym = dlsym(RTLD_DEFAULT, name);
-    if (!sym) { SBXLog(@"C 函数缺失（跳过）：%s", name); return; }
-    SBXLoadSubstrate();
-    if (!gHookFunc) { SBXLog(@"MSHookFunction 不可用：%s", name); return; }
-    gHookFunc(sym, (void *)SBXReturnOne, NULL);
-    SBXLog(@"已挂 C 函数：%s → 1", name);
-}
-
-static void SBXInstallChamoisCaps(void) {
-    gSBFHandle = dlopen("/System/Library/PrivateFrameworks/SpringBoardFoundation.framework/SpringBoardFoundation", RTLD_GLOBAL);
-    if (!gSBFHandle) { SBXLog(@"SpringBoardFoundation 打不开"); return; }
-    // iOS 16.0 用 IsEnabled，16.1+ 用 Is...Available —— 两个都试，缺的自动跳过
-    SBXHookCFunc("SBChamoisExternalDisplayControllerIsEnabled");
-    SBXHookCFunc("SBFIsChamoisExternalDisplayControllerAvailable");
-    SBXHookCFunc("SBFIsChamoisWindowingUIAvailable");
-    SBXHookCFunc("SBFIsFlexibleWindowingUIAvailable");
-    SBXHookCFunc("SBChamoisWindowingEnabled");
-    SBXHookCFunc("SBMedusaMultitaskingEnabled");
-}
-
-// Stage Manager 开关（TrollPad：SBMainWorkspace -isMedusaEnabled → YES）
-static BOOL (*orig_isMedusaEnabled)(id, SEL);
-static BOOL hook_isMedusaEnabled(id self, SEL _cmd) {
-    if (CardsOn()) return YES;
-    return orig_isMedusaEnabled ? orig_isMedusaEnabled(self, _cmd) : NO;
-}
-
-// MGGetBoolAnswer 放行「增强多任务」，否则上面几个开关会被能力检查拦回（TrollPadEx 有这条）
-static BOOL (*orig_mgBoolAnswer)(CFStringRef);
-static BOOL hook_mgBoolAnswer(CFStringRef key) {
-    if (CardsOn() && key && CFStringCompare(key, CFSTR("DeviceSupportsEnhancedMultitasking"), 0) == kCFCompareEqualTo) {
-        return YES;
-    }
-    return orig_mgBoolAnswer ? orig_mgBoolAnswer(key) : NO;
-}
-
-static void SBXHookMGBool(void) {
-    void *sym = dlsym(RTLD_DEFAULT, "MGGetBoolAnswer");
-    if (!sym) {
-        void *mg = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
-        if (mg) sym = dlsym(mg, "MGGetBoolAnswer");
-    }
-    if (!sym) { SBXLog(@"MGGetBoolAnswer 缺失（跳过）"); return; }
-    SBXLoadSubstrate();
-    if (!gHookFunc) return;
-    gHookFunc(sym, (void *)hook_mgBoolAnswer, (void **)&orig_mgBoolAnswer);
-    SBXLog(@"已挂 MGGetBoolAnswer（增强多任务放行）");
-}
-
-
-// ---- 动画：把假 iPad idiom 计数也包在这两个转场入口上（TrollPad 的做法）----
-static void (*orig_overlayTransBegin)(id, SEL, id, id);
-__attribute__((unused)) static void hook_overlayTransBegin(id self, SEL _cmd, id coord, id ctx) {
-    if (gFakePadIdiom) gPadIdiom++;
-    @try { if (orig_overlayTransBegin) orig_overlayTransBegin(self, _cmd, coord, ctx); }
-    @finally { gPadIdiom--; }
-}
-static void (*orig_updateContent)(id, SEL);
-__attribute__((unused)) static void hook_updateContent(id self, SEL _cmd) {
-    if (gFakePadIdiom) gPadIdiom++;
-    @try { if (orig_updateContent) orig_updateContent(self, _cmd); }
-    @finally { gPadIdiom--; }
-}
-
-
-// ---- 网格尺寸：最小值钳到 150（TrollPad：更小会崩/错位）----
+// ---- Chamois 网格尺寸：最小 150，更小会崩（TrollPad 注释原话）----
 static void (*orig_setGridWidths)(id, SEL, id);
-__attribute__((unused)) static void hook_setGridWidths(id self, SEL _cmd, id values) {
+static void hook_setGridWidths(id self, SEL _cmd, id values) {
     if (CardsOn() && [values isKindOfClass:NSArray.class] && [values count]) {
         NSUInteger maxValue = [[values lastObject] unsignedIntegerValue];
         if (maxValue > 150) {
             NSMutableArray *arr = [NSMutableArray array];
             for (NSUInteger i = 150; i < maxValue; i += 20) [arr addObject:@(i)];
             [arr addObject:@(maxValue)];
-            SBXLog(@"gridWidths %lu → %lu 档", (unsigned long)[values count], (unsigned long)[arr count]);
             values = arr;
         }
     }
     if (orig_setGridWidths) orig_setGridWidths(self, _cmd, values);
 }
 static void (*orig_setGridHeights)(id, SEL, id);
-__attribute__((unused)) static void hook_setGridHeights(id self, SEL _cmd, id values) {
+static void hook_setGridHeights(id self, SEL _cmd, id values) {
     if (CardsOn() && [values isKindOfClass:NSArray.class] && [values count]) {
         NSUInteger maxValue = [[values lastObject] unsignedIntegerValue];
         if (maxValue > 150) {
@@ -710,15 +592,42 @@ __attribute__((unused)) static void hook_setGridHeights(id self, SEL _cmd, id va
     }
     if (orig_setGridHeights) orig_setGridHeights(self, _cmd, values);
 }
-// 舞台 App 上限
+
+// ---- 舞台 App 上限（TrollPad：5）----
 static unsigned long (*orig_maxAppsOnStage)(id, SEL);
-__attribute__((unused)) static unsigned long hook_maxAppsOnStage(id self, SEL _cmd) {
+static unsigned long hook_maxAppsOnStage(id self, SEL _cmd) {
     if (CardsOn()) return 5;
     return orig_maxAppsOnStage ? orig_maxAppsOnStage(self, _cmd) : 1;
 }
-// 方向动画 / 方向模式：同样包 idiom
+
+// ---- iPadOS 的切换动画：TrollPad 用开关控制（默认关）----
+static BOOL (*orig_isDevicePad)(id, SEL);
+static BOOL hook_isDevicePad(id self, SEL _cmd) {
+    if (CardsOn()) return SBXBool(@"cardAnim", NO);
+    return orig_isDevicePad ? orig_isDevicePad(self, _cmd) : NO;
+}
+
+// ---- idiom 临时代理的各个入口（forcePadIdiom 的用法照 TrollPad）----
+static void (*orig_overlayTransBegin)(id, SEL, id, id);
+static void hook_overlayTransBegin(id self, SEL _cmd, id coord, id ctx) {
+    if (gFakePadIdiom) gPadIdiom++;
+    @try { if (orig_overlayTransBegin) orig_overlayTransBegin(self, _cmd, coord, ctx); }
+    @finally { gPadIdiom--; }
+}
+static void (*orig_loadContent)(id, SEL, id);
+static void hook_loadContent(id self, SEL _cmd, id scene) {
+    if (gFakePadIdiom) gPadIdiom++;
+    @try { if (orig_loadContent) orig_loadContent(self, _cmd, scene); }
+    @finally { gPadIdiom--; }
+}
+static void (*orig_updateContentVC)(id, SEL);
+static void hook_updateContentVC(id self, SEL _cmd) {
+    if (gFakePadIdiom) gPadIdiom++;
+    @try { if (orig_updateContentVC) orig_updateContentVC(self, _cmd); }
+    @finally { gPadIdiom--; }
+}
 static id (*orig_defaultOrientAnim)(id, SEL, BOOL);
-__attribute__((unused)) static id hook_defaultOrientAnim(id self, SEL _cmd, BOOL animatable) {
+static id hook_defaultOrientAnim(id self, SEL _cmd, BOOL animatable) {
     if (gFakePadIdiom) gPadIdiom++;
     id r = nil;
     @try { r = orig_defaultOrientAnim ? orig_defaultOrientAnim(self, _cmd, animatable) : nil; }
@@ -726,116 +635,91 @@ __attribute__((unused)) static id hook_defaultOrientAnim(id self, SEL _cmd, BOOL
     return r;
 }
 static long (*orig_orientationMode)(id, SEL);
-__attribute__((unused)) static long hook_orientationMode(id self, SEL _cmd) {
+static long hook_orientationMode(id self, SEL _cmd) {
     if (gFakePadIdiom) gPadIdiom++;
     long r = 0;
     @try { r = orig_orientationMode ? orig_orientationMode(self, _cmd) : 0; }
     @finally { gPadIdiom--; }
     return r;
 }
-
-// ---- 探针：抓转场到底是谁在做 cross-dissolve ----
-static void (*orig_vcTransition)(id, SEL, id, id, double, unsigned long, id, id);
-__attribute__((unused)) static void hook_vcTransition(id self, SEL _cmd, id fromVC, id toVC, double dur, unsigned long opts, id anims, id comp) {
-    static int n = 0;
-    if (n++ < 6) {
-        SBXLog(@"探针 VC转场 %@ → %@ dur=%.2f opts=%#lx",
-               NSStringFromClass([fromVC class]), NSStringFromClass([toVC class]), dur, opts);
-    }
-    if (orig_vcTransition) orig_vcTransition(self, _cmd, fromVC, toVC, dur, opts, anims, comp);
-}
-static void (*orig_viewTransition)(id, SEL, id, double, unsigned long, id, id);
-__attribute__((unused)) static void hook_viewTransition(id self, SEL _cmd, id view, double dur, unsigned long opts, id anims, id comp) {
-    static int n = 0;
-    if (n++ < 6) {
-        SBXLog(@"探针 视图转场 %@ dur=%.2f opts=%#lx", NSStringFromClass([view class]), dur, opts);
-    }
-    if (orig_viewTransition) orig_viewTransition(self, _cmd, view, dur, opts, anims, comp);
-}
-
-
-// ---- 探针：抓切换器相关图层上的动画（CALayer 层）----
-static void (*orig_addAnim)(id, SEL, id, NSString *);
-__attribute__((unused)) static void hook_addAnim(id self, SEL _cmd, id anim, NSString *key) {
-    static int n = 0;
-    if (n < 40) {
-        NSString *owner = NSStringFromClass([self class]);
-        id del = nil;
-        @try { del = [self valueForKey:@"delegate"]; } @catch (__unused NSException *e) {}
-        NSString *delCls = del ? NSStringFromClass([del class]) : @"-";
-        NSString *hay = [owner stringByAppendingString:delCls];
-        if ([hay containsString:@"Switcher"] || [hay containsString:@"Icon"] || [hay containsString:@"Card"]) {
-            n++;
-            SBXLog(@"探针 图层动画 layer=%@ delegate=%@ key=%@ cls=%@",
-                   owner, delCls, key, NSStringFromClass([anim class]));
-        }
-    }
-    if (orig_addAnim) orig_addAnim(self, _cmd, anim, key);
-}
-// 切换器内容视图出现时机 + 几何
-static void (*orig_swWillAppear)(id, SEL, BOOL);
-__attribute__((unused)) static void hook_swWillAppear(id self, SEL _cmd, BOOL animated) {
-    SBXLog(@"探针 切换器 willAppear frame=%@ alpha=%.2f", NSStringFromCGRect([self view].frame), [self view].alpha);
-    if (orig_swWillAppear) orig_swWillAppear(self, _cmd, animated);
-}
-static void (*orig_swDidAppear)(id, SEL, BOOL);
-__attribute__((unused)) static void hook_swDidAppear(id self, SEL _cmd, BOOL animated) {
-    SBXLog(@"探针 切换器 didAppear frame=%@ alpha=%.2f", NSStringFromCGRect([self view].frame), [self view].alpha);
-    if (orig_swDidAppear) orig_swDidAppear(self, _cmd, animated);
-}
-
-
-// ---- 卡片后台：切换器出现时的缩放淡入动画 ----
-static void (*orig_swAnimWillAppear)(id, SEL, BOOL);
-static void hook_swAnimWillAppear(id self, SEL _cmd, BOOL animated) {
-    if (orig_swAnimWillAppear) orig_swAnimWillAppear(self, _cmd, animated);
-    if (!CardsOn()) return;
-    UIView *v = [(UIViewController *)self view];
-    if (!v) return;
-    v.transform = CGAffineTransformMakeScale(0.92, 0.92);
-    v.alpha = 0.0;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [UIView animateWithDuration:0.34 delay:0
-             usingSpringWithDamping:0.86 initialSpringVelocity:0
-                          options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
-                       animations:^{
-            v.transform = CGAffineTransformIdentity;
-            v.alpha = 1.0;
-        } completion:nil];
-    });
-}
-static void (*orig_swAnimDidDisappear)(id, SEL, BOOL);
-static void hook_swAnimDidDisappear(id self, SEL _cmd, BOOL animated) {
-    if (orig_swAnimDidDisappear) orig_swAnimDidDisappear(self, _cmd, animated);
-    UIView *v = [(UIViewController *)self view];
-    v.transform = CGAffineTransformIdentity;
-    v.alpha = 1.0;
-}
-
-// 探针：切换器内容视图何时装载
-static void (*orig_loadContent)(id, SEL, id);
-static void hook_loadContent(id self, SEL _cmd, id scene) {
-    static int n = 0;
-    if (n++ < 3) SBXLog(@"探针 _loadContentViewControllerIfNecessary 调用 (#%d)", n);
-    // TrollPad：iOS 16 的多任务修正，入口内临时把 idiom 说成 Pad
+static id (*orig_defaultOrientations)(id, SEL);
+static id hook_defaultOrientations(id self, SEL _cmd) {
     if (gFakePadIdiom) gPadIdiom++;
-    @try { if (orig_loadContent) orig_loadContent(self, _cmd, scene); }
+    id r = nil;
+    @try { r = orig_defaultOrientations ? orig_defaultOrientations(self, _cmd) : nil; }
     @finally { gPadIdiom--; }
-}
-// TrollPad 注释原文：「Fix iOS 18 app switcher animation」
-// —— 这条是切换器内容刷新入口，不包裹 idiom 的话动画会按 iPhone 算
-static void (*orig_updateContentVC)(id, SEL);
-static void hook_updateContentVC(id self, SEL _cmd) {
-    if (gFakePadIdiom) gPadIdiom++;
-    @try { if (orig_updateContentVC) orig_updateContentVC(self, _cmd); }
-    @finally { gPadIdiom--; }
+    return r;
 }
 
-// 主屏手势开关
-static BOOL (*orig_homeGestureEnabled)(id, SEL);
-__attribute__((unused)) static BOOL hook_homeGestureEnabled(id self, SEL _cmd) {
-    if (CardsOn() || DockOn()) return YES;
-    return orig_homeGestureEnabled ? orig_homeGestureEnabled(self, _cmd) : YES;
+// ---- Medusa / 多任务能力（TrollPad 原样）----
+static BOOL (*orig_isMedusaEnabled)(id, SEL);
+static BOOL hook_isMedusaEnabled(id self, SEL _cmd) {
+    if (CardsOn()) return YES;
+    return orig_isMedusaEnabled ? orig_isMedusaEnabled(self, _cmd) : NO;
+}
+static long (*orig_medusaCapabilities)(id, SEL);
+static long hook_medusaCapabilities(id self, SEL _cmd) {
+    if (CardsOn()) return 2;
+    return orig_medusaCapabilities ? orig_medusaCapabilities(self, _cmd) : 0;
+}
+static BOOL (*orig_platformHomeGesture)(id, SEL);
+static BOOL hook_platformHomeGesture(id self, SEL _cmd) {
+    if (CardsOn()) return YES;
+    return orig_platformHomeGesture ? orig_platformHomeGesture(self, _cmd) : YES;
+}
+static BOOL (*orig_isMedusaCapable)(id, SEL);
+static BOOL hook_isMedusaCapable(id self, SEL _cmd) {
+    BOOL r = orig_isMedusaCapable ? orig_isMedusaCapable(self, _cmd) : NO;
+    if (CardsOn()) return YES;
+    return r;
+}
+static BOOL (*orig_supportsAppType)(id, SEL, int);
+static BOOL hook_supportsAppType(id self, SEL _cmd, int type) {
+    if (CardsOn()) return YES;
+    return orig_supportsAppType ? orig_supportsAppType(self, _cmd, type) : NO;
+}
+static BOOL (*orig_isFloatingActive)(id, SEL);
+static BOOL hook_isFloatingActive(id self, SEL _cmd) {
+    if (CardsOn()) return YES;
+    return orig_isFloatingActive ? orig_isFloatingActive(self, _cmd) : NO;
+}
+
+// ---- 能力函数：TrollPad 只挂这一个 ----
+static void *gSBFHandle = NULL;
+static int SBXReturnOne(void) { return 1; }
+
+static void SBXInstallExtDisplayCap(void) {
+    gSBFHandle = dlopen("/System/Library/PrivateFrameworks/SpringBoardFoundation.framework/SpringBoardFoundation", RTLD_GLOBAL);
+    if (!gSBFHandle) { SBXLog(@"SpringBoardFoundation 打不开"); return; }
+    // iOS 16.0 用 IsEnabled；16.1+ 改成 Is...Available
+    void *fn = dlsym(gSBFHandle, "SBChamoisExternalDisplayControllerIsEnabled");
+    if (!fn) fn = dlsym(gSBFHandle, "SBFIsChamoisExternalDisplayControllerAvailable");
+    if (!fn) { SBXLog(@"外接显示能力函数不存在（跳过）"); return; }
+    SBXLoadSubstrate();
+    if (!gHookFunc) { SBXLog(@"MSHookFunction 不可用"); return; }
+    gHookFunc(fn, (void *)SBXReturnOne, NULL);
+    SBXLog(@"已挂 C 函数：外接显示能力 → 1（TrollPad 只挂这一个）");
+}
+
+// ---- 增强多任务能力检查放行（TrollPadEx 有，TrollPad 也有 MGGetBoolAnswer）----
+static BOOL (*orig_mgBoolAnswer)(CFStringRef);
+static BOOL hook_mgBoolAnswer(CFStringRef key) {
+    if (CardsOn() && key && CFStringCompare(key, CFSTR("DeviceSupportsEnhancedMultitasking"), 0) == kCFCompareEqualTo) {
+        return YES;
+    }
+    return orig_mgBoolAnswer ? orig_mgBoolAnswer(key) : NO;
+}
+static void SBXHookMGBool(void) {
+    void *sym = dlsym(RTLD_DEFAULT, "MGGetBoolAnswer");
+    if (!sym) {
+        void *mg = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
+        if (mg) sym = dlsym(mg, "MGGetBoolAnswer");
+    }
+    if (!sym) { SBXLog(@"MGGetBoolAnswer 缺失（跳过）"); return; }
+    SBXLoadSubstrate();
+    if (!gHookFunc) return;
+    gHookFunc(sym, (void *)hook_mgBoolAnswer, (void **)&orig_mgBoolAnswer);
+    SBXLog(@"已挂 MGGetBoolAnswer");
 }
 
 #pragma mark - ============ C. iPad 悬浮 Dock ============
@@ -960,23 +844,30 @@ __attribute__((constructor)) static void SBXInit(void) {
             HookMsg("SBAppSwitcherScrollView", "setScrollEnabled:", (IMP)hook_setScrollEnabled, (IMP *)&orig_setScrollEnabled);
         }
         if (b) {
+            SBXLog(@"卡片后台：整段照搬 TrollPad / TweakSB.x");
+            // 样式
             HookMsg("SBAppSwitcherSettings", "effectiveSwitcherStyle", (IMP)hook_switcherStyle, (IMP *)&orig_switcherStyle);
-            SBXLog(@"模式=P（Chamois 能力开关 + TrollPad 的 setter 硬改写 0.38）");
-
-            // 1) 能力开关：这才是 iPad 转场管线的钥匙
-            SBXInstallChamoisCaps();
-            HookMsg("SBMainWorkspace", "isMedusaEnabled", (IMP)hook_isMedusaEnabled, (IMP *)&orig_isMedusaEnabled);
-            SBXHookMGBool();
-
-            // 2) 卡片尺寸/间距：setter 硬改写（0.38 / 65·40 / 30·10，照 TrollPad）
+            HookMsg("SBAppSwitcherSettings", "setDefaultValues", (IMP)hook_swSettingsDefaults, (IMP *)&orig_swSettingsDefaults);
+            // 尺寸/间距（setter 硬改写 0.38 / 65·40 / 30·10）
             HookMsg("SBAppSwitcherSettings", "setGridSwitcherPageScale:", (IMP)hook_setGridPageScale, (IMP *)&orig_setGridPageScale);
             HookMsg("SBAppSwitcherSettings", "setGridSwitcherVerticalNaturalSpacingPortrait:", (IMP)hook_setGridVSpacingP, (IMP *)&orig_setGridVSpacingP);
             HookMsg("SBAppSwitcherSettings", "setGridSwitcherVerticalNaturalSpacingLandscape:", (IMP)hook_setGridVSpacingL, (IMP *)&orig_setGridVSpacingL);
             HookMsg("SBAppSwitcherSettings", "setGridSwitcherHorizontalInterpageSpacingPortrait:", (IMP)hook_setGridHSpacingP, (IMP *)&orig_setGridHSpacingP);
             HookMsg("SBAppSwitcherSettings", "setGridSwitcherHorizontalInterpageSpacingLandscape:", (IMP)hook_setGridHSpacingL, (IMP *)&orig_setGridHSpacingL);
-
-            // 4) idiom 临时代理 —— TrollPad 的核心手法：只在关键入口把 idiom 说成 Pad，
-            //    入口外仍然是 iPhone，避免全局改 idiom 把整个系统搞乱
+            // Chamois 尺寸 / 舞台上限
+            HookMsg("SBSwitcherChamoisLayoutAttributes", "setGridWidths:", (IMP)hook_setGridWidths, (IMP *)&orig_setGridWidths);
+            HookMsg("SBSwitcherChamoisLayoutAttributes", "setGridHeights:", (IMP)hook_setGridHeights, (IMP *)&orig_setGridHeights);
+            HookMsg("SBSwitcherChamoisSettings", "maximumNumberOfAppsOnStage", (IMP)hook_maxAppsOnStage, (IMP *)&orig_maxAppsOnStage);
+            // iPadOS 切换动画（默认关）
+            HookMsg("SBFluidSwitcherViewController", "isDevicePad", (IMP)hook_isDevicePad, (IMP *)&orig_isDevicePad);
+            // Medusa / 多任务能力
+            HookMsg("SBMainWorkspace", "isMedusaEnabled", (IMP)hook_isMedusaEnabled, (IMP *)&orig_isMedusaEnabled);
+            HookMsg("SBPlatformController", "medusaCapabilities", (IMP)hook_medusaCapabilities, (IMP *)&orig_medusaCapabilities);
+            HookMsg("SBPlatformController", "isHomeGestureEnabled", (IMP)hook_platformHomeGesture, (IMP *)&orig_platformHomeGesture);
+            HookMsg("SBApplication", "isMedusaCapable", (IMP)hook_isMedusaCapable, (IMP *)&orig_isMedusaCapable);
+            HookMsg("SBApplication", "_supportsApplicationType:", (IMP)hook_supportsAppType, (IMP *)&orig_supportsAppType);
+            HookMsg("SBMedusaConfigurationUsageMetric", "_isFloatingActive", (IMP)hook_isFloatingActive, (IMP *)&orig_isFloatingActive);
+            // idiom 只在转场入口内临时伪装（TrollPad 的核心手法）
             gFakePadIdiom = YES;
             HookMsg("UIDevice", "userInterfaceIdiom", (IMP)hook_idiom, (IMP *)&orig_idiom);
             HookMsg("SBFullScreenSwitcherLiveContentOverlayCoordinator",
@@ -987,20 +878,15 @@ __attribute__((constructor)) static void SBXInit(void) {
                     (IMP)hook_loadContent, (IMP *)&orig_loadContent);
             HookMsg("SBSwitcherController", "_updateContentViewControllerIfNeeded",
                     (IMP)hook_updateContentVC, (IMP *)&orig_updateContentVC);
-
-            // 4b) Chamois 尺寸/舞台上限（TrollPad 原版就有；<150 会崩）
-            HookMsg("SBSwitcherChamoisLayoutAttributes", "setGridWidths:", (IMP)hook_setGridWidths, (IMP *)&orig_setGridWidths);
-            HookMsg("SBSwitcherChamoisLayoutAttributes", "setGridHeights:", (IMP)hook_setGridHeights, (IMP *)&orig_setGridHeights);
-            HookMsg("SBSwitcherChamoisSettings", "maximumNumberOfAppsOnStage", (IMP)hook_maxAppsOnStage, (IMP *)&orig_maxAppsOnStage);
-
-            // 3) 切场动画：独立开关，默认关（TrollPad 默认也是关的）
-            if (SBXBool(@"cardAnim", NO)) {
-                HookMsg("SBFluidSwitcherViewController", "viewWillAppear:", (IMP)hook_swAnimWillAppear, (IMP *)&orig_swAnimWillAppear);
-                HookMsg("SBFluidSwitcherViewController", "viewDidDisappear:", (IMP)hook_swAnimDidDisappear, (IMP *)&orig_swAnimDidDisappear);
-                SBXLog(@"已挂 切换器缩放淡入动画（开关已开）");
-            } else {
-                SBXLog(@"切场动画开关=关，不挂");
-            }
+            HookMsg("SBTraitsPipelineManager", "defaultOrientationAnimationSettingsAnimatable:",
+                    (IMP)hook_defaultOrientAnim, (IMP *)&orig_defaultOrientAnim);
+            HookMsg("SBTraitsSceneParticipantDelegate", "_orientationMode",
+                    (IMP)hook_orientationMode, (IMP *)&orig_orientationMode);
+            HookMsg("UIApplication", "_defaultSupportedInterfaceOrientations",
+                    (IMP)hook_defaultOrientations, (IMP *)&orig_defaultOrientations);
+            // 能力函数（只 1 个，TrollPad 原样）
+            SBXInstallExtDisplayCap();
+            SBXHookMGBool();
         }
         if (c) {
             // 原版/ TrollPad 都是 hook 这个【类方法】，不是 C 函数
