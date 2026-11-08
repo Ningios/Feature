@@ -579,6 +579,12 @@ static void hook_setHomeScaleInApp(id self, SEL _cmd, double v) {
     if (orig_setHomeScaleInApp) orig_setHomeScaleInApp(self, _cmd, v);
 }
 
+// ---- 5b. setHomeScreenScaleInSwitcher：透传（反汇编确认只是原样转发 6 个 double）----
+static void (*orig_setHomeScaleInSwitcher)(id, SEL, double);
+static void hook_setHomeScaleInSwitcher(id self, SEL _cmd, double v) {
+    if (orig_setHomeScaleInSwitcher) orig_setHomeScaleInSwitcher(self, _cmd, v);
+}
+
 // ---- 6. 图标容器：0.8 缩放（SBX 唯一带几何改动的一条）----
 static void (*orig_iconContainerDidMove)(id, SEL);
 static void hook_iconContainerDidMove(id self, SEL _cmd) {
@@ -746,6 +752,7 @@ __attribute__((constructor)) static void SBXInit(void) {
             HookMsg("SBFluidSwitcherViewController", "isDevicePad", (IMP)hook_isDevicePad, (IMP *)&orig_isDevicePad);
             HookMsg("SBSwitcherModifier", "shouldZoomToSystemApertureForEvent:activeLayout:", (IMP)hook_shouldZoomAperture, (IMP *)&orig_shouldZoomAperture);
             HookMsg("SBFluidSwitcherAnimationSettings", "setHomeScreenScaleInApplication:", (IMP)hook_setHomeScaleInApp, (IMP *)&orig_setHomeScaleInApp);
+            HookMsg("SBFluidSwitcherAnimationSettings", "setHomeScreenScaleInSwitcher:", (IMP)hook_setHomeScaleInSwitcher, (IMP *)&orig_setHomeScaleInSwitcher);
             HookMsg("SBFluidSwitcherIconImageContainerView", "didMoveToWindow", (IMP)hook_iconContainerDidMove, (IMP *)&orig_iconContainerDidMove);
             HookMsg("SBAppSwitcherScrollView", "didMoveToWindow", (IMP)hook_cardScrollDidMove, (IMP *)&orig_cardScrollDidMove);
             HookMsg("SBFluidSwitcherViewController", "viewDidLoad", (IMP)hook_cardDidLoad, (IMP *)&orig_cardDidLoad);
