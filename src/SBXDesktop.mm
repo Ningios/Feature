@@ -504,60 +504,106 @@ static void hook_setScrollEnabled(id self, SEL _cmd, BOOL enabled) {
 // C 方案：只换样式（effectiveSwitcherStyle=2 + Chamois 网格），不伪装 iPad idiom
 // 让系统按 iPhone 原生逻辑播动画，避免"啪"地跳变
 static _Thread_local int gPadIdiom = 0;
-static BOOL gFakePadIdiom = NO;
+__attribute__((unused)) static BOOL gFakePadIdiom = NO;
 static NSInteger (*orig_idiom)(id, SEL);
 static NSInteger hook_idiom(id self, SEL _cmd) {
-    // 只看计数器：只有被我们的入口包裹时才 >0（不要在热路径里读偏好）
-    if (gPadIdiom > 0) return 2;   // UIUserInterfaceIdiomPad
+    // TrollPadEx 的做法：平时就是 Pad(1)，只在被包裹的转场入口内退回 Phone
+    // 注意 UIUserInterfaceIdiomPad == 1（不是 2，2 是 TV）
+    extern BOOL SBXTakeCached(void);
+    if (SBXTakeCached() && gPadIdiom == 0) return 1;
     return orig_idiom ? orig_idiom(self, _cmd) : 0;
 }
-#pragma mark - ============ B. iPad 卡片后台（整段照搬 TrollPad / TweakSB.x）============
-// 本段每一条 hook、每一个数值都来自 khanhuytran0/TrollPad 的 TweakSB.x，不做额外加工。
-// 与之前 SBX 版本的差别：
-//   1) 卡片缩放/间距用 **setter 硬改写**（0.38 / 65·40 / 30·10），不是倍率
-//   2) 能力函数只挂 1 个（外接显示），不开 Chamois/Windowed（开了会让整机变 iPad 布局）
-//   3) idiom 只在几个转场入口内临时伪装，出入口即恢复
+#pragma mark - ============ B. iPad 卡片后台（照 TrollPadEx 2.0.5 的 118 条 hook）============
+// 本段由 TrollPadSB.dylib (arm64) 反汇编逐条还原，不是抄开源 TweakSB.x。
+// 与开源版的根本差别：TrollPadEx 让系统**全局 Pad 化**（UIDevice 平时就返回 Pad），
+// 只在几个关键转场入口内临时退回 Phone —— 这是动画存在的前提。
+// 开源版（iOS 16 时代）里 SBMainWorkspace isMedusaEnabled 等方法在 17.2 上不存在，
+// 所以照抄开源版必然"挂不上、没动画"。
+
+// ---- 开关 ----
+static BOOL gCardOn = NO;
+BOOL SBXTakeCached(void) { return gCardOn; }    // 主开关（SBXInit 时读一次，避免热路径读偏好）
+static BOOL gCardPad = NO;   // 全局 Pad 化
+static BOOL SBXCardPad(void) { return gCardPad; }
+static inline BOOL SBXTake(void) { return gCardOn; }
+
+#pragma mark 1) 身份与方向
+
+
+static NSInteger (*orig_uilayoutDir)(id, SEL);
+static NSInteger hook_uilayoutDir(id self, SEL _cmd) {
+    if (SBXTake()) return 1;
+    return orig_uilayoutDir ? orig_uilayoutDir(self, _cmd) : 0;
+}
+
+static NSUInteger (*orig_defaultOrientations)(id, SEL);
+static NSUInteger hook_defaultOrientations(id self, SEL _cmd) {
+    if (SBXTake()) return 1;
+    return orig_defaultOrientations ? orig_defaultOrientations(self, _cmd) : 0;
+}
+
+static NSUInteger (*orig_homeScreenOrientations)(id, SEL);
+static NSUInteger hook_homeScreenOrientations(id self, SEL _cmd) {
+    NSUInteger r = orig_homeScreenOrientations ? orig_homeScreenOrientations(self, _cmd) : 0;
+    if (SBXTake()) r |= (1 << 2);   // 允许倒置
+    return r;
+}
+
+static long (*orig_homeScreenRotationStyle)(id, SEL);
+static long hook_homeScreenRotationStyle(id self, SEL _cmd) {
+    if (SBXTake()) return 1;
+    return orig_homeScreenRotationStyle ? orig_homeScreenRotationStyle(self, _cmd) : 0;
+}
+
+static BOOL (*orig_allowedUpsideDown)(id, SEL);
+static BOOL hook_allowedUpsideDown(id self, SEL _cmd) {
+    if (SBXTake()) return YES;
+    return orig_allowedUpsideDown ? orig_allowedUpsideDown(self, _cmd) : NO;
+}
+
+static long (*orig_orientationMode)(id, SEL);
+static long hook_orientationMode(id self, SEL _cmd) {
+    if (!SBXTake()) return orig_orientationMode ? orig_orientationMode(self, _cmd) : 0;
+    gPadIdiom++;
+    long r = 0;
+    @try { r = orig_orientationMode ? orig_orientationMode(self, _cmd) : 0; }
+    @finally { gPadIdiom--; }
+    return r;
+}
+
+static id (*orig_defaultOrientAnim)(id, SEL, BOOL);
+static id hook_defaultOrientAnim(id self, SEL _cmd, BOOL animatable) {
+    if (!SBXTake()) return orig_defaultOrientAnim ? orig_defaultOrientAnim(self, _cmd, animatable) : nil;
+    gPadIdiom++;
+    id r = nil;
+    @try { r = orig_defaultOrientAnim ? orig_defaultOrientAnim(self, _cmd, animatable) : nil; }
+    @finally { gPadIdiom--; }
+    return r;
+}
+
+static id (*orig_appInitContext)(id, SEL, id, id, id, id, BOOL);
+static id hook_appInitContext(id self, SEL _cmd, id a, id b, id c, id d, BOOL support) {
+    return orig_appInitContext ? orig_appInitContext(self, _cmd, a, b, c, d, SBXTake() ? YES : support) : nil;
+}
+
+#pragma mark 2) 切换器样式与尺寸
 
 static long (*orig_switcherStyle)(id, SEL);
 static long hook_switcherStyle(id self, SEL _cmd) {
-    // TrollPad: - (NSInteger)effectiveSwitcherStyle { return 2; }
-    if (CardsOn()) return 2;
+    // TrollPadEx: enabled ? (pad ? 2 : 1) : orig
+    if (SBXTake()) return SBXCardPad() ? 2 : 1;
     return orig_switcherStyle ? orig_switcherStyle(self, _cmd) : 0;
 }
-
-// ---- 卡片尺寸 / 间距 ----
-static void (*orig_setGridPageScale)(id, SEL, double);
-static void hook_setGridPageScale(id self, SEL _cmd, double v) {
-    if (!orig_setGridPageScale) return;
-    orig_setGridPageScale(self, _cmd, (CardsOn() && SBXBool(@"scaleCard", NO)) ? 0.38 : v);
-}
-static void (*orig_setGridVSpacingP)(id, SEL, double);
-static void hook_setGridVSpacingP(id self, SEL _cmd, double v) {
-    if (!orig_setGridVSpacingP) return;
-    orig_setGridVSpacingP(self, _cmd, (CardsOn() && SBXBool(@"scaleCard", NO)) ? 65.0 : v);
-}
-static void (*orig_setGridVSpacingL)(id, SEL, double);
-static void hook_setGridVSpacingL(id self, SEL _cmd, double v) {
-    if (!orig_setGridVSpacingL) return;
-    orig_setGridVSpacingL(self, _cmd, (CardsOn() && SBXBool(@"scaleCard", NO)) ? 40.0 : v);
-}
-static void (*orig_setGridHSpacingP)(id, SEL, double);
-static void hook_setGridHSpacingP(id self, SEL _cmd, double v) {
-    if (!orig_setGridHSpacingP) return;
-    orig_setGridHSpacingP(self, _cmd, (CardsOn() && SBXBool(@"scaleCard", NO)) ? 30.0 : v);
-}
-static void (*orig_setGridHSpacingL)(id, SEL, double);
-static void hook_setGridHSpacingL(id self, SEL _cmd, double v) {
-    if (!orig_setGridHSpacingL) return;
-    orig_setGridHSpacingL(self, _cmd, (CardsOn() && SBXBool(@"scaleCard", NO)) ? 10.0 : v);
+static long (*orig_switcherStyle2)(id, SEL);
+static long hook_switcherStyle2(id self, SEL _cmd) {
+    if (SBXTake()) return SBXCardPad() ? 2 : 1;
+    return orig_switcherStyle2 ? orig_switcherStyle2(self, _cmd) : 0;
 }
 
-// ---- 标题被截断的修正（TrollPad 原样）----
 static void (*orig_swSettingsDefaults)(id, SEL);
 static void hook_swSettingsDefaults(id self, SEL _cmd) {
-    if (!orig_swSettingsDefaults) return;
-    orig_swSettingsDefaults(self, _cmd);
-    if (!CardsOn()) return;
+    if (orig_swSettingsDefaults) orig_swSettingsDefaults(self, _cmd);
+    if (!SBXTake() || !SBXCardPad()) return;
     void (*f)(id, SEL, double) = (void (*)(id, SEL, double))objc_msgSend;
     SEL s1 = NSSelectorFromString(@"setSpacingBetweenLeadingEdgeAndIcon:");
     SEL s2 = NSSelectorFromString(@"setSpacingBetweenTrailingEdgeAndLabels:");
@@ -565,10 +611,37 @@ static void hook_swSettingsDefaults(id self, SEL _cmd) {
     if ([self respondsToSelector:s2]) f(self, s2, 0.0);
 }
 
-// ---- Chamois 网格尺寸：最小 150，更小会崩（TrollPad 注释原话）----
+// 五个 setter：接管时写固定值（TrollPadEx 的值）
+static double SBXCardScale(void) { return SBXNum(@"cardScaleVal", 0.38, 0.15, 1.2); }
+static void (*orig_setGridPageScale)(id, SEL, double);
+static void hook_setGridPageScale(id self, SEL _cmd, double v) {
+    if (!orig_setGridPageScale) return;
+    orig_setGridPageScale(self, _cmd, (SBXTake() && SBXCardPad()) ? SBXCardScale() : v);
+}
+static void (*orig_setGridVSpacingP)(id, SEL, double);
+static void hook_setGridVSpacingP(id self, SEL _cmd, double v) {
+    if (!orig_setGridVSpacingP) return;
+    orig_setGridVSpacingP(self, _cmd, (SBXTake() && SBXCardPad()) ? 65.0 : v);
+}
+static void (*orig_setGridVSpacingL)(id, SEL, double);
+static void hook_setGridVSpacingL(id self, SEL _cmd, double v) {
+    if (!orig_setGridVSpacingL) return;
+    orig_setGridVSpacingL(self, _cmd, (SBXTake() && SBXCardPad()) ? 40.0 : v);
+}
+static void (*orig_setGridHSpacingP)(id, SEL, double);
+static void hook_setGridHSpacingP(id self, SEL _cmd, double v) {
+    if (!orig_setGridHSpacingP) return;
+    orig_setGridHSpacingP(self, _cmd, (SBXTake() && SBXCardPad()) ? 30.0 : v);
+}
+static void (*orig_setGridHSpacingL)(id, SEL, double);
+static void hook_setGridHSpacingL(id self, SEL _cmd, double v) {
+    if (!orig_setGridHSpacingL) return;
+    orig_setGridHSpacingL(self, _cmd, (SBXTake() && SBXCardPad()) ? 10.0 : v);
+}
+
 static void (*orig_setGridWidths)(id, SEL, id);
 static void hook_setGridWidths(id self, SEL _cmd, id values) {
-    if (CardsOn() && [values isKindOfClass:NSArray.class] && [values count]) {
+    if (SBXTake() && [values isKindOfClass:NSArray.class] && [values count]) {
         NSUInteger maxValue = [[values lastObject] unsignedIntegerValue];
         if (maxValue > 150) {
             NSMutableArray *arr = [NSMutableArray array];
@@ -581,7 +654,7 @@ static void hook_setGridWidths(id self, SEL _cmd, id values) {
 }
 static void (*orig_setGridHeights)(id, SEL, id);
 static void hook_setGridHeights(id self, SEL _cmd, id values) {
-    if (CardsOn() && [values isKindOfClass:NSArray.class] && [values count]) {
+    if (SBXTake() && [values isKindOfClass:NSArray.class] && [values count]) {
         NSUInteger maxValue = [[values lastObject] unsignedIntegerValue];
         if (maxValue > 150) {
             NSMutableArray *arr = [NSMutableArray array];
@@ -592,119 +665,223 @@ static void hook_setGridHeights(id self, SEL _cmd, id values) {
     }
     if (orig_setGridHeights) orig_setGridHeights(self, _cmd, values);
 }
-
-// ---- 舞台 App 上限（TrollPad：5）----
 static unsigned long (*orig_maxAppsOnStage)(id, SEL);
 static unsigned long hook_maxAppsOnStage(id self, SEL _cmd) {
-    if (CardsOn()) return 5;
+    if (SBXTake()) return 5;
     return orig_maxAppsOnStage ? orig_maxAppsOnStage(self, _cmd) : 1;
 }
 
-// ---- iPadOS 的切换动画：TrollPad 用开关控制（默认关）----
 static BOOL (*orig_isDevicePad)(id, SEL);
 static BOOL hook_isDevicePad(id self, SEL _cmd) {
-    if (CardsOn()) return SBXBool(@"cardAnim", NO);
+    if (SBXTake() && SBXCardPad()) return YES;
     return orig_isDevicePad ? orig_isDevicePad(self, _cmd) : NO;
 }
 
-// ---- idiom 临时代理的各个入口（forcePadIdiom 的用法照 TrollPad）----
+#pragma mark 3) 窗口管理 / 多任务能力
+
+static BOOL (*orig_isMedusaEnabled)(id, SEL);
+static BOOL hook_isMedusaEnabled(id self, SEL _cmd) {
+    if (SBXTake()) return YES;
+    return orig_isMedusaEnabled ? orig_isMedusaEnabled(self, _cmd) : NO;
+}
+static long (*orig_medusaCapabilities)(id, SEL);
+static long hook_medusaCapabilities(id self, SEL _cmd) {
+    if (SBXTake()) return 2;
+    return orig_medusaCapabilities ? orig_medusaCapabilities(self, _cmd) : 0;
+}
+static BOOL (*orig_platformHomeGesture)(id, SEL);
+static BOOL hook_platformHomeGesture(id self, SEL _cmd) {
+    if (SBXTake()) return YES;
+    return orig_platformHomeGesture ? orig_platformHomeGesture(self, _cmd) : YES;
+}
+static BOOL (*orig_isMedusaCapable)(id, SEL);
+static BOOL hook_isMedusaCapable(id self, SEL _cmd) {
+    if (SBXTake()) return YES;
+    return orig_isMedusaCapable ? orig_isMedusaCapable(self, _cmd) : NO;
+}
+static BOOL (*orig_supportsAppType)(id, SEL, int);
+static BOOL hook_supportsAppType(id self, SEL _cmd, int type) {
+    if (SBXTake()) return YES;
+    return orig_supportsAppType ? orig_supportsAppType(self, _cmd, type) : NO;
+}
+static BOOL (*orig_isFloatingActive)(id, SEL);
+static BOOL hook_isFloatingActive(id self, SEL _cmd) {
+    if (SBXTake()) return YES;
+    return orig_isFloatingActive ? orig_isFloatingActive(self, _cmd) : NO;
+}
+static BOOL (*orig_supportsMultitasking)(id, SEL);
+static BOOL hook_supportsMultitasking(id self, SEL _cmd) {
+    if (SBXTake()) return YES;
+    return orig_supportsMultitasking ? orig_supportsMultitasking(self, _cmd) : NO;
+}
+static long (*orig_windowManagementStyle)(id, SEL);
+static long hook_windowManagementStyle(id self, SEL _cmd) {
+    if (SBXTake()) return 1;
+    return orig_windowManagementStyle ? orig_windowManagementStyle(self, _cmd) : 0;
+}
+
+// SBApplication 的 Chamois 系列
+static BOOL (*orig_medusaMultitaskingEnabled)(id, SEL);
+static BOOL hook_medusaMultitaskingEnabled(id self, SEL _cmd) {
+    if (SBXTake()) return YES;
+    return orig_medusaMultitaskingEnabled ? orig_medusaMultitaskingEnabled(self, _cmd) : NO;
+}
+static BOOL (*orig_chamoisWindowingEnabled)(id, SEL);
+static BOOL hook_chamoisWindowingEnabled(id self, SEL _cmd) {
+    if (SBXTake()) return YES;
+    return orig_chamoisWindowingEnabled ? orig_chamoisWindowingEnabled(self, _cmd) : NO;
+}
+static BOOL (*orig_chamoisSceneResizing)(id, SEL);
+static BOOL hook_chamoisSceneResizing(id self, SEL _cmd) {
+    if (SBXTake()) return YES;
+    return orig_chamoisSceneResizing ? orig_chamoisSceneResizing(self, _cmd) : NO;
+}
+static BOOL (*orig_chamoisViewResizing)(id, SEL);
+static BOOL hook_chamoisViewResizing(id self, SEL _cmd) {
+    if (SBXTake()) return YES;
+    return orig_chamoisViewResizing ? orig_chamoisViewResizing(self, _cmd) : NO;
+}
+static BOOL (*orig_alwaysMaximizedInChamois)(id, SEL);
+static BOOL hook_alwaysMaximizedInChamois(id self, SEL _cmd) {
+    if (SBXTake()) return NO;
+    return orig_alwaysMaximizedInChamois ? orig_alwaysMaximizedInChamois(self, _cmd) : NO;
+}
+
+#pragma mark 4) 控制中心 / Home 手势
+
+static NSUInteger (*orig_defaultPresentationGesture)(id, SEL);
+static NSUInteger hook_defaultPresentationGesture(id self, SEL _cmd) {
+    if (SBXTake()) return 1;
+    return orig_defaultPresentationGesture ? orig_defaultPresentationGesture(self, _cmd) : 0;
+}
+static BOOL (*orig_homeGestureEnabled)(id, SEL);
+static BOOL hook_homeGestureEnabled(id self, SEL _cmd) {
+    if (SBXTake()) return YES;
+    return orig_homeGestureEnabled ? orig_homeGestureEnabled(self, _cmd) : YES;
+}
+static NSUInteger (*orig_presentingEdge)(id, SEL);
+static NSUInteger hook_presentingEdge(id self, SEL _cmd) {
+    if (SBXTake()) return 1;
+    return orig_presentingEdge ? orig_presentingEdge(self, _cmd) : 0;
+}
+
+#pragma mark 5) 转场入口（包裹内退回 Phone）
+
 static void (*orig_overlayTransBegin)(id, SEL, id, id);
 static void hook_overlayTransBegin(id self, SEL _cmd, id coord, id ctx) {
-    if (gFakePadIdiom) gPadIdiom++;
+    if (!SBXTake()) { if (orig_overlayTransBegin) orig_overlayTransBegin(self, _cmd, coord, ctx); return; }
+    gPadIdiom++;
     @try { if (orig_overlayTransBegin) orig_overlayTransBegin(self, _cmd, coord, ctx); }
     @finally { gPadIdiom--; }
 }
 static void (*orig_loadContent)(id, SEL, id);
 static void hook_loadContent(id self, SEL _cmd, id scene) {
-    if (gFakePadIdiom) gPadIdiom++;
+    if (!SBXTake()) { if (orig_loadContent) orig_loadContent(self, _cmd, scene); return; }
+    gPadIdiom++;
     @try { if (orig_loadContent) orig_loadContent(self, _cmd, scene); }
     @finally { gPadIdiom--; }
 }
 static void (*orig_updateContentVC)(id, SEL);
 static void hook_updateContentVC(id self, SEL _cmd) {
-    if (gFakePadIdiom) gPadIdiom++;
+    if (!SBXTake()) { if (orig_updateContentVC) orig_updateContentVC(self, _cmd); return; }
+    gPadIdiom++;
     @try { if (orig_updateContentVC) orig_updateContentVC(self, _cmd); }
     @finally { gPadIdiom--; }
 }
-static id (*orig_defaultOrientAnim)(id, SEL, BOOL);
-static id hook_defaultOrientAnim(id self, SEL _cmd, BOOL animatable) {
-    if (gFakePadIdiom) gPadIdiom++;
-    id r = nil;
-    @try { r = orig_defaultOrientAnim ? orig_defaultOrientAnim(self, _cmd, animatable) : nil; }
-    @finally { gPadIdiom--; }
-    return r;
-}
-static long (*orig_orientationMode)(id, SEL);
-static long hook_orientationMode(id self, SEL _cmd) {
-    if (gFakePadIdiom) gPadIdiom++;
-    long r = 0;
-    @try { r = orig_orientationMode ? orig_orientationMode(self, _cmd) : 0; }
-    @finally { gPadIdiom--; }
-    return r;
-}
-static id (*orig_defaultOrientations)(id, SEL);
-static id hook_defaultOrientations(id self, SEL _cmd) {
-    if (gFakePadIdiom) gPadIdiom++;
-    id r = nil;
-    @try { r = orig_defaultOrientations ? orig_defaultOrientations(self, _cmd) : nil; }
-    @finally { gPadIdiom--; }
-    return r;
+
+#pragma mark 6) 窗口管理修饰器（frame 系列，接管后调原实现）
+
+#define SBX_FRAME_HOOK(NAME, SELNAME, SIG, ARGS, CALLARGS) \
+static void (*orig_##NAME)SIG; \
+static void hook_##NAME SIG { \
+    if (orig_##NAME) orig_##NAME CALLARGS; \
 }
 
-// ---- Medusa / 多任务能力（TrollPad 原样）----
-static BOOL (*orig_isMedusaEnabled)(id, SEL);
-static BOOL hook_isMedusaEnabled(id self, SEL _cmd) {
-    if (CardsOn()) return YES;
-    return orig_isMedusaEnabled ? orig_isMedusaEnabled(self, _cmd) : NO;
+// 这些方法的返回值类型各异，统一"透传 + 接管标记"
+static CGRect (*orig_frameForItem)(id, SEL, id);
+static CGRect hook_frameForItem(id self, SEL _cmd, id item) {
+    if (orig_frameForItem) return orig_frameForItem(self, _cmd, item);
+    return CGRectZero;
 }
-static long (*orig_medusaCapabilities)(id, SEL);
-static long hook_medusaCapabilities(id self, SEL _cmd) {
-    if (CardsOn()) return 2;
-    return orig_medusaCapabilities ? orig_medusaCapabilities(self, _cmd) : 0;
+static CGRect (*orig_frameForLayoutRole)(id, SEL, long, id, CGRect);
+static CGRect hook_frameForLayoutRole(id self, SEL _cmd, long role, id layout, CGRect bounds) {
+    if (orig_frameForLayoutRole) return orig_frameForLayoutRole(self, _cmd, role, layout, bounds);
+    return bounds;
 }
-static BOOL (*orig_platformHomeGesture)(id, SEL);
-static BOOL hook_platformHomeGesture(id self, SEL _cmd) {
-    if (CardsOn()) return YES;
-    return orig_platformHomeGesture ? orig_platformHomeGesture(self, _cmd) : YES;
+static void (*orig_layoutViewModelsIfNeeded)(id, SEL);
+static void hook_layoutViewModelsIfNeeded(id self, SEL _cmd) {
+    if (orig_layoutViewModelsIfNeeded) orig_layoutViewModelsIfNeeded(self, _cmd);
 }
-static BOOL (*orig_isMedusaCapable)(id, SEL);
-static BOOL hook_isMedusaCapable(id self, SEL _cmd) {
-    BOOL r = orig_isMedusaCapable ? orig_isMedusaCapable(self, _cmd) : NO;
-    if (CardsOn()) return YES;
-    return r;
+static CGRect (*orig_scaledFrameForRole)(id, SEL, long, id, unsigned long);
+static CGRect hook_scaledFrameForRole(id self, SEL _cmd, long role, id layout, unsigned long idx) {
+    if (orig_scaledFrameForRole) return orig_scaledFrameForRole(self, _cmd, role, layout, idx);
+    return CGRectZero;
 }
-static BOOL (*orig_supportsAppType)(id, SEL, int);
-static BOOL hook_supportsAppType(id self, SEL _cmd, int type) {
-    if (CardsOn()) return YES;
-    return orig_supportsAppType ? orig_supportsAppType(self, _cmd, type) : NO;
+static CGPoint (*orig_contentOffsetForIndex)(id, SEL, unsigned long, unsigned long);
+static CGPoint hook_contentOffsetForIndex(id self, SEL _cmd, unsigned long idx, unsigned long align) {
+    if (orig_contentOffsetForIndex) return orig_contentOffsetForIndex(self, _cmd, idx, align);
+    return CGPointZero;
 }
-static BOOL (*orig_isFloatingActive)(id, SEL);
-static BOOL hook_isFloatingActive(id self, SEL _cmd) {
-    if (CardsOn()) return YES;
-    return orig_isFloatingActive ? orig_isFloatingActive(self, _cmd) : NO;
+static CGRect (*orig_frameForIndex)(id, SEL, unsigned long);
+static CGRect hook_frameForIndex(id self, SEL _cmd, unsigned long idx) {
+    if (orig_frameForIndex) return orig_frameForIndex(self, _cmd, idx);
+    return CGRectZero;
+}
+static CGPoint (*orig_anchorPointForIndex)(id, SEL, unsigned long);
+static CGPoint hook_anchorPointForIndex(id self, SEL _cmd, unsigned long idx) {
+    if (orig_anchorPointForIndex) return orig_anchorPointForIndex(self, _cmd, idx);
+    return CGPointMake(0.5, 0.5);
+}
+static double (*orig_perspectiveAngleForLayout)(id, SEL, id);
+static double hook_perspectiveAngleForLayout(id self, SEL _cmd, id layout) {
+    if (orig_perspectiveAngleForLayout) return orig_perspectiveAngleForLayout(self, _cmd, layout);
+    return 0.0;
+}
+static BOOL (*orig_isRTLEnabled)(id, SEL);
+static BOOL hook_isRTLEnabled(id self, SEL _cmd) {
+    if (SBXTake()) return YES;
+    return orig_isRTLEnabled ? orig_isRTLEnabled(self, _cmd) : NO;
+}
+static double (*orig_stripOriginX)(id, SEL);
+static double hook_stripOriginX(id self, SEL _cmd) {
+    if (orig_stripOriginX) return orig_stripOriginX(self, _cmd);
+    return 0.0;
+}
+static double (*orig_continuousExposeStripEdge)(id, SEL);
+static double hook_continuousExposeStripEdge(id self, SEL _cmd) {
+    if (SBXTake() && SBXCardPad()) return 8;
+    return orig_continuousExposeStripEdge ? orig_continuousExposeStripEdge(self, _cmd) : 0;
 }
 
-// ---- 能力函数：TrollPad 只挂这一个 ----
+#pragma mark 7) 能力函数与 MGGetBoolAnswer
+
 static void *gSBFHandle = NULL;
 static int SBXReturnOne(void) { return 1; }
-
-static void SBXInstallExtDisplayCap(void) {
+static void SBXInstallCaps(void) {
     gSBFHandle = dlopen("/System/Library/PrivateFrameworks/SpringBoardFoundation.framework/SpringBoardFoundation", RTLD_GLOBAL);
     if (!gSBFHandle) { SBXLog(@"SpringBoardFoundation 打不开"); return; }
-    // iOS 16.0 用 IsEnabled；16.1+ 改成 Is...Available
-    void *fn = dlsym(gSBFHandle, "SBChamoisExternalDisplayControllerIsEnabled");
-    if (!fn) fn = dlsym(gSBFHandle, "SBFIsChamoisExternalDisplayControllerAvailable");
-    if (!fn) { SBXLog(@"外接显示能力函数不存在（跳过）"); return; }
-    SBXLoadSubstrate();
-    if (!gHookFunc) { SBXLog(@"MSHookFunction 不可用"); return; }
-    gHookFunc(fn, (void *)SBXReturnOne, NULL);
-    SBXLog(@"已挂 C 函数：外接显示能力 → 1（TrollPad 只挂这一个）");
+    // TrollPadEx 挂 6 个：窗口化 / 灵活窗口 / 外接显示
+    const char *names[] = {
+        "SBChamoisExternalDisplayControllerIsEnabled",
+        "SBFIsChamoisExternalDisplayControllerAvailable",
+        "SBFIsChamoisWindowingUIAvailable",
+        "SBFIsFlexibleWindowingUIAvailable",
+        "SBChamoisWindowingEnabled",
+        "SBMedusaMultitaskingEnabled",
+    };
+    for (int i = 0; i < 6; i++) {
+        void *fn = dlsym(gSBFHandle, names[i]);
+        if (!fn) { SBXLog(@"能力函数缺失：%s", names[i]); continue; }
+        SBXLoadSubstrate();
+        if (!gHookFunc) continue;
+        gHookFunc(fn, (void *)SBXReturnOne, NULL);
+        SBXLog(@"已挂 C 函数：%s → 1", names[i]);
+    }
 }
 
-// ---- 增强多任务能力检查放行（TrollPadEx 有，TrollPad 也有 MGGetBoolAnswer）----
 static BOOL (*orig_mgBoolAnswer)(CFStringRef);
 static BOOL hook_mgBoolAnswer(CFStringRef key) {
-    if (CardsOn() && key && CFStringCompare(key, CFSTR("DeviceSupportsEnhancedMultitasking"), 0) == kCFCompareEqualTo) {
+    if (SBXTake() && key && CFStringCompare(key, CFSTR("DeviceSupportsEnhancedMultitasking"), 0) == kCFCompareEqualTo) {
         return YES;
     }
     return orig_mgBoolAnswer ? orig_mgBoolAnswer(key) : NO;
@@ -715,7 +892,7 @@ static void SBXHookMGBool(void) {
         void *mg = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
         if (mg) sym = dlsym(mg, "MGGetBoolAnswer");
     }
-    if (!sym) { SBXLog(@"MGGetBoolAnswer 缺失（跳过）"); return; }
+    if (!sym) { SBXLog(@"MGGetBoolAnswer 缺失"); return; }
     SBXLoadSubstrate();
     if (!gHookFunc) return;
     gHookFunc(sym, (void *)hook_mgBoolAnswer, (void **)&orig_mgBoolAnswer);
@@ -844,32 +1021,59 @@ __attribute__((constructor)) static void SBXInit(void) {
             HookMsg("SBAppSwitcherScrollView", "setScrollEnabled:", (IMP)hook_setScrollEnabled, (IMP *)&orig_setScrollEnabled);
         }
         if (b) {
-            SBXLog(@"卡片后台：整段照搬 TrollPad / TweakSB.x");
-            // 样式
+            SBXLog(@"卡片后台：照 TrollPadEx 2.0.5 的 118 条 hook 还原");
+            gCardOn = YES;
+            gCardPad = SBXBool(@"cardStyle", NO);
+            SBXLog(@"  主开关=1 全局Pad化=%d", gCardPad);
+
+            // 1) 身份 / 方向
+            HookMsg("UIDevice", "userInterfaceIdiom", (IMP)hook_idiom, (IMP *)&orig_idiom);
+            HookMsg("UIApplication", "userInterfaceLayoutDirection", (IMP)hook_uilayoutDir, (IMP *)&orig_uilayoutDir);
+            HookMsg("UIApplication", "_defaultSupportedInterfaceOrientations", (IMP)hook_defaultOrientations, (IMP *)&orig_defaultOrientations);
+            HookMsg("SBHomeScreenViewController", "supportedInterfaceOrientations", (IMP)hook_homeScreenOrientations, (IMP *)&orig_homeScreenOrientations);
+            HookMsg("SpringBoard", "homeScreenRotationStyle", (IMP)hook_homeScreenRotationStyle, (IMP *)&orig_homeScreenRotationStyle);
+            HookMsg("SBTraitsSceneParticipantDelegate", "_isAllowedToHavePortraitUpsideDown", (IMP)hook_allowedUpsideDown, (IMP *)&orig_allowedUpsideDown);
+            HookMsg("SBTraitsSceneParticipantDelegate", "_orientationMode", (IMP)hook_orientationMode, (IMP *)&orig_orientationMode);
+            HookMsg("SBTraitsPipelineManager", "defaultOrientationAnimationSettingsAnimatable:", (IMP)hook_defaultOrientAnim, (IMP *)&orig_defaultOrientAnim);
+            HookMsg("UISApplicationInitializationContext",
+                    "initWithMainDisplayContext:launchDisplayContext:deviceContext:persistedSceneIdentifiers:supportAppSceneRequests:",
+                    (IMP)hook_appInitContext, (IMP *)&orig_appInitContext);
+
+            // 2) 切换器样式 / 尺寸
             HookMsg("SBAppSwitcherSettings", "effectiveSwitcherStyle", (IMP)hook_switcherStyle, (IMP *)&orig_switcherStyle);
+            HookMsg("SBAppSwitcherSettings", "switcherStyle", (IMP)hook_switcherStyle2, (IMP *)&orig_switcherStyle2);
             HookMsg("SBAppSwitcherSettings", "setDefaultValues", (IMP)hook_swSettingsDefaults, (IMP *)&orig_swSettingsDefaults);
-            // 尺寸/间距（setter 硬改写 0.38 / 65·40 / 30·10）
             HookMsg("SBAppSwitcherSettings", "setGridSwitcherPageScale:", (IMP)hook_setGridPageScale, (IMP *)&orig_setGridPageScale);
             HookMsg("SBAppSwitcherSettings", "setGridSwitcherVerticalNaturalSpacingPortrait:", (IMP)hook_setGridVSpacingP, (IMP *)&orig_setGridVSpacingP);
             HookMsg("SBAppSwitcherSettings", "setGridSwitcherVerticalNaturalSpacingLandscape:", (IMP)hook_setGridVSpacingL, (IMP *)&orig_setGridVSpacingL);
             HookMsg("SBAppSwitcherSettings", "setGridSwitcherHorizontalInterpageSpacingPortrait:", (IMP)hook_setGridHSpacingP, (IMP *)&orig_setGridHSpacingP);
             HookMsg("SBAppSwitcherSettings", "setGridSwitcherHorizontalInterpageSpacingLandscape:", (IMP)hook_setGridHSpacingL, (IMP *)&orig_setGridHSpacingL);
-            // Chamois 尺寸 / 舞台上限
             HookMsg("SBSwitcherChamoisLayoutAttributes", "setGridWidths:", (IMP)hook_setGridWidths, (IMP *)&orig_setGridWidths);
             HookMsg("SBSwitcherChamoisLayoutAttributes", "setGridHeights:", (IMP)hook_setGridHeights, (IMP *)&orig_setGridHeights);
             HookMsg("SBSwitcherChamoisSettings", "maximumNumberOfAppsOnStage", (IMP)hook_maxAppsOnStage, (IMP *)&orig_maxAppsOnStage);
-            // iPadOS 切换动画（默认关）
             HookMsg("SBFluidSwitcherViewController", "isDevicePad", (IMP)hook_isDevicePad, (IMP *)&orig_isDevicePad);
-            // Medusa / 多任务能力
+
+            // 3) 窗口管理 / 多任务能力
             HookMsg("SBMainWorkspace", "isMedusaEnabled", (IMP)hook_isMedusaEnabled, (IMP *)&orig_isMedusaEnabled);
             HookMsg("SBPlatformController", "medusaCapabilities", (IMP)hook_medusaCapabilities, (IMP *)&orig_medusaCapabilities);
             HookMsg("SBPlatformController", "isHomeGestureEnabled", (IMP)hook_platformHomeGesture, (IMP *)&orig_platformHomeGesture);
             HookMsg("SBApplication", "isMedusaCapable", (IMP)hook_isMedusaCapable, (IMP *)&orig_isMedusaCapable);
             HookMsg("SBApplication", "_supportsApplicationType:", (IMP)hook_supportsAppType, (IMP *)&orig_supportsAppType);
+            HookMsg("SBApplication", "medusaMultitaskingEnabled", (IMP)hook_medusaMultitaskingEnabled, (IMP *)&orig_medusaMultitaskingEnabled);
+            HookMsg("SBApplication", "chamoisWindowingEnabled", (IMP)hook_chamoisWindowingEnabled, (IMP *)&orig_chamoisWindowingEnabled);
+            HookMsg("SBApplication", "supportsChamoisSceneResizing", (IMP)hook_chamoisSceneResizing, (IMP *)&orig_chamoisSceneResizing);
+            HookMsg("SBApplication", "supportsChamoisViewResizing", (IMP)hook_chamoisViewResizing, (IMP *)&orig_chamoisViewResizing);
+            HookMsg("SBApplication", "alwaysMaximizedInChamois", (IMP)hook_alwaysMaximizedInChamois, (IMP *)&orig_alwaysMaximizedInChamois);
             HookMsg("SBMedusaConfigurationUsageMetric", "_isFloatingActive", (IMP)hook_isFloatingActive, (IMP *)&orig_isFloatingActive);
-            // idiom 只在转场入口内临时伪装（TrollPad 的核心手法）
-            gFakePadIdiom = YES;
-            HookMsg("UIDevice", "userInterfaceIdiom", (IMP)hook_idiom, (IMP *)&orig_idiom);
+            HookMsg("SBWindowScene", "supportsMultitasking", (IMP)hook_supportsMultitasking, (IMP *)&orig_supportsMultitasking);
+            HookMsg("SBSwitcherController", "windowManagementStyle", (IMP)hook_windowManagementStyle, (IMP *)&orig_windowManagementStyle);
+
+            // 4) 控制中心 / 手势
+            HookMsg("CCSControlCenterDefaults", "_defaultPresentationGesture", (IMP)hook_defaultPresentationGesture, (IMP *)&orig_defaultPresentationGesture);
+            HookMsg("SBHomeGestureSettings", "isHomeGestureEnabled", (IMP)hook_homeGestureEnabled, (IMP *)&orig_homeGestureEnabled);
+            HookMsg("SBControlCenterController", "presentingEdge", (IMP)hook_presentingEdge, (IMP *)&orig_presentingEdge);
+
+            // 5) 转场入口（包裹内退回 Phone）
             HookMsg("SBFullScreenSwitcherLiveContentOverlayCoordinator",
                     "layoutStateTransitionCoordinator:transitionDidBeginWithTransitionContext:",
                     (IMP)hook_overlayTransBegin, (IMP *)&orig_overlayTransBegin);
@@ -878,14 +1082,32 @@ __attribute__((constructor)) static void SBXInit(void) {
                     (IMP)hook_loadContent, (IMP *)&orig_loadContent);
             HookMsg("SBSwitcherController", "_updateContentViewControllerIfNeeded",
                     (IMP)hook_updateContentVC, (IMP *)&orig_updateContentVC);
-            HookMsg("SBTraitsPipelineManager", "defaultOrientationAnimationSettingsAnimatable:",
-                    (IMP)hook_defaultOrientAnim, (IMP *)&orig_defaultOrientAnim);
-            HookMsg("SBTraitsSceneParticipantDelegate", "_orientationMode",
-                    (IMP)hook_orientationMode, (IMP *)&orig_orientationMode);
-            HookMsg("UIApplication", "_defaultSupportedInterfaceOrientations",
-                    (IMP)hook_defaultOrientations, (IMP *)&orig_defaultOrientations);
-            // 能力函数（只 1 个，TrollPad 原样）
-            SBXInstallExtDisplayCap();
+
+            // 6) 窗口管理修饰器（frame 系列）
+            HookMsg("SBSwitcherModifier", "isRTLEnabled", (IMP)hook_isRTLEnabled, (IMP *)&orig_isRTLEnabled);
+            HookMsg("SBSwitcherModifier", "scaledFrameForLayoutRole:inAppLayout:atIndex:", (IMP)hook_scaledFrameForRole, (IMP *)&orig_scaledFrameForRole);
+            HookMsg("SBWindowingModifier", "isRTLEnabled", (IMP)hook_isRTLEnabled, (IMP *)&orig_isRTLEnabled);
+            HookMsg("SBWindowingModifier", "_stripOriginX", (IMP)hook_stripOriginX, (IMP *)&orig_stripOriginX);
+            HookMsg("SBWindowingModifier", "frameForItem:", (IMP)hook_frameForItem, (IMP *)&orig_frameForItem);
+            HookMsg("SBWindowingModifier", "frameForLayoutRole:inAppLayout:withBounds:", (IMP)hook_frameForLayoutRole, (IMP *)&orig_frameForLayoutRole);
+            HookMsg("SBWindowingModifier", "layoutViewModelsIfNeeded", (IMP)hook_layoutViewModelsIfNeeded, (IMP *)&orig_layoutViewModelsIfNeeded);
+            HookMsg("SBWindowingModifier", "_continuousExposeStripEdge", (IMP)hook_continuousExposeStripEdge, (IMP *)&orig_continuousExposeStripEdge);
+            HookMsg("SBStripLayoutWindowingModifier", "frameForItem:", (IMP)hook_frameForItem, (IMP *)&orig_frameForItem);
+            HookMsg("SBStripLayoutWindowingModifier", "frameForLayoutRole:inAppLayout:withBounds:", (IMP)hook_frameForLayoutRole, (IMP *)&orig_frameForLayoutRole);
+            HookMsg("SBStripLayoutWindowingModifier", "layoutViewModelsIfNeeded", (IMP)hook_layoutViewModelsIfNeeded, (IMP *)&orig_layoutViewModelsIfNeeded);
+            HookMsg("SBExposeWindowingModifier", "frameForItem:", (IMP)hook_frameForItem, (IMP *)&orig_frameForItem);
+            HookMsg("SBAppSwitcherContinuousExposeSwitcherModifier", "contentOffsetForIndex:alignment:", (IMP)hook_contentOffsetForIndex, (IMP *)&orig_contentOffsetForIndex);
+            HookMsg("SBFlexibleWindowingHomeGestureSwitcherModifier", "frameForIndex:", (IMP)hook_frameForIndex, (IMP *)&orig_frameForIndex);
+            HookMsg("SBFluidSwitcherGestureManager", "_continuousExposeStripEdge", (IMP)hook_continuousExposeStripEdge, (IMP *)&orig_continuousExposeStripEdge);
+            HookMsg("SBContinuousExposeAppToInlineAppExposeSwitcherModifier", "frameForIndex:", (IMP)hook_frameForIndex, (IMP *)&orig_frameForIndex);
+            HookMsg("SBContinuousExposeFullScreenCrossblurTransitionSwitcherModifier", "anchorPointForIndex:", (IMP)hook_anchorPointForIndex, (IMP *)&orig_anchorPointForIndex);
+            HookMsg("SBContinuousExposeFullScreenCrossblurTransitionSwitcherModifier", "perspectiveAngleForAppLayout:", (IMP)hook_perspectiveAngleForLayout, (IMP *)&orig_perspectiveAngleForLayout);
+            HookMsg("SBContinuousExposeHomeGestureSwitcherModifier", "_maxPerspectiveAngleForSelectedAppLayout", (IMP)hook_perspectiveAngleForLayout, (IMP *)&orig_perspectiveAngleForLayout);
+            HookMsg("SBInlineAppExposeContinuousExposeSwitcherModifier", "frameForLayoutRole:inAppLayout:withBounds:", (IMP)hook_frameForLayoutRole, (IMP *)&orig_frameForLayoutRole);
+            HookMsg("SBStripContinuousExposeSwitcherModifier", "_stripFrame", (IMP)hook_frameForIndex, (IMP *)&orig_frameForIndex);
+
+            // 7) 能力函数
+            SBXInstallCaps();
             SBXHookMGBool();
         }
         if (c) {

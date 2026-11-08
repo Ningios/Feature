@@ -6,7 +6,7 @@ import os, shutil, subprocess, hashlib, sys
 
 BASE = "/var/minis/shared/sbx-split/desktop"
 ART  = sys.argv[1] if len(sys.argv) > 1 else "/tmp/build_local"
-OUT  = "/var/minis/attachments/Feature-1.0.0-R_iphoneos-arm64e.deb"
+OUT  = "/var/minis/attachments/Feature-1.0.0-S_iphoneos-arm64e.deb"
 W    = "/tmp/feature-pack"
 
 shutil.rmtree(W, ignore_errors=True)
