@@ -7,6 +7,9 @@
 #import <UIKit/UIKit.h>
 #import <spawn.h>
 #import <signal.h>
+#import <sys/sysctl.h>
+#import <dlfcn.h>
+#import <string.h>
 
 extern char **environ;
 
@@ -46,21 +49,66 @@ static void SBXPLog(NSString *fmt, ...) {
     [self presentViewController:ac animated:YES completion:nil];
 }
 
+// ---- 注销：多路兜底 ----
+// roothide 的 jbroot 是随机路径，/var/jb 通常不存在；iOS 也没有 /usr/bin/killall。
+// 所以先问 libjbroot 要真实路径，最后直接 sysctl 找 SpringBoard 的 pid 发 SIGKILL。
+static NSString *SBXJBPath(const char *rel) {
+    void *h = dlopen("/usr/lib/libjbroot.dylib", RTLD_LAZY);
+    if (!h) h = dlopen("libjbroot.dylib", RTLD_LAZY);
+    if (h) {
+        const char *(*jbroot)(const char *) = (const char *(*)(const char *))dlsym(h, "jbroot");
+        if (jbroot) {
+            const char *p = jbroot(rel);
+            if (p && *p) return [NSString stringWithUTF8String:p];
+        }
+    }
+    return nil;
+}
+static pid_t SBXPIDNamed(const char *want) {
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
+    size_t size = 0;
+    if (sysctl(mib, 4, NULL, &size, NULL, 0) != 0 || size == 0) return 0;
+    struct kinfo_proc *procs = (struct kinfo_proc *)malloc(size);
+    if (!procs) return 0;
+    pid_t found = 0;
+    if (sysctl(mib, 4, procs, &size, NULL, 0) == 0) {
+        int n = (int)(size / sizeof(struct kinfo_proc));
+        for (int i = 0; i < n; i++) {
+            if (!strcmp(procs[i].kp_proc.p_comm, want)) { found = procs[i].kp_proc.p_pid; break; }
+        }
+    }
+    free(procs);
+    return found;
+}
+
 - (void)sbxDoRespring {
     SBXPLog(@"[注销] 开始重启桌面");
-    // 1) 优先用 killall（rootless 在 /var/jb/usr/bin）
-    NSArray *cands = @[@"/var/jb/usr/bin/killall", @"/usr/bin/killall", @"/bin/killall"];
+    NSMutableArray *cands = [NSMutableArray array];
+    NSString *jb = SBXJBPath("/usr/bin/killall");
+    if (jb) { SBXPLog(@"[注销] jbroot killall = %@", jb); [cands addObject:jb]; }
+    [cands addObjectsFromArray:@[@"/var/jb/usr/bin/killall", @"/usr/bin/killall", @"/bin/killall"]];
+    NSFileManager *fm = [NSFileManager defaultManager];
     for (NSString *path in cands) {
-        if (![[NSFileManager defaultManager] fileExistsAtPath:path]) continue;
+        if (![fm fileExistsAtPath:path]) { SBXPLog(@"[注销] 不存在：%@", path); continue; }
         const char *p = path.fileSystemRepresentation;
         char a0[] = "-9", a1[] = "SpringBoard";
         char *argv[] = {(char *)p, a0, a1, NULL};
         pid_t pid = 0;
         int r = posix_spawn(&pid, p, NULL, NULL, argv, environ);
-        SBXPLog(@"[注销] %@ → %d", path, r);
-        if (r == 0) return;
+        SBXPLog(@"[注销] spawn %@ → %d (pid=%d)", path, r, (int)pid);
+        if (r == 0) break;
     }
-    SBXPLog(@"[注销] 未找到可用的 killall，放弃");
+    // 兜底：不靠外部工具，直接杀 SpringBoard
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        pid_t sb = SBXPIDNamed("SpringBoard");
+        SBXPLog(@"[注销] 兜底：SpringBoard pid=%d", (int)sb);
+        if (sb > 0) {
+            int k = kill(sb, SIGKILL);
+            SBXPLog(@"[注销] kill(%d, SIGKILL) → %d", (int)sb, k);
+        } else {
+            SBXPLog(@"[注销] 找不到 SpringBoard 进程");
+        }
+    });
 }
 
 - (NSArray *)specifiers {
