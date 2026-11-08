@@ -592,12 +592,17 @@ static void hook_cardSetContentOffset(id self, SEL _cmd, CGPoint offset) {
 }
 
 // ---- 6. SBMainSwitcherControllerCoordinator：转场（17.2 只有 DidBegin/DidEnd，没有 WillEnd）----
+// SBX 原版（0x203c4）：开关开时直接 return，不调原实现 ——
+// 吞掉系统的 iPhone crossfade 转场，让 modifier 自己的滑动动画接管
 static void (*orig_cardTrBegin)(id, SEL, id, id);
 static void hook_cardTrBegin(id self, SEL _cmd, id coord, id ctx) {
+    if (SBXTake()) return;
     if (orig_cardTrBegin) orig_cardTrBegin(self, _cmd, coord, ctx);
 }
+// SBX 原版（0x203e4）：同样开关开时吞掉
 static void (*orig_cardTrEnd)(id, SEL, id, id);
 static void hook_cardTrEnd(id self, SEL _cmd, id coord, id ctx) {
+    if (SBXTake()) return;
     if (orig_cardTrEnd) orig_cardTrEnd(self, _cmd, coord, ctx);
 }
 static void (*orig_cardLoadContent)(id, SEL, id);
