@@ -532,6 +532,17 @@ static long hook_switcherStyle(id self, SEL _cmd) {
     if (SBXTake()) return 2;
     return orig_switcherStyle ? orig_switcherStyle(self, _cmd) : 0;
 }
+// 17.2 头文件实锤：switcherStyle / setSwitcherStyle: 是样式真源（long long），
+// effectiveSwitcherStyle 只是派生 getter。deck 滑动转场读的是它。
+static long (*orig_switcherStyleRaw)(id, SEL);
+static long hook_switcherStyleRaw(id self, SEL _cmd) {
+    if (SBXTake()) return 2;
+    return orig_switcherStyleRaw ? orig_switcherStyleRaw(self, _cmd) : 0;
+}
+static void (*orig_setSwitcherStyle)(id, SEL, long long);
+static void hook_setSwitcherStyle(id self, SEL _cmd, long long v) {
+    if (orig_setSwitcherStyle) orig_setSwitcherStyle(self, _cmd, SBXTake() ? 2 : v);
+}
 static double (*orig_gridPageScale)(id, SEL);
 static double hook_gridPageScale(id self, SEL _cmd) {
     double v = orig_gridPageScale ? orig_gridPageScale(self, _cmd) : 1.0;
@@ -735,6 +746,8 @@ __attribute__((constructor)) static void SBXInit(void) {
             SBXLog(@"卡片后台：逐条对照 82flex iOS 17.2 头文件（12 条，全部实锤存在）");
             gCardOn = YES;
             HookMsg("SBAppSwitcherSettings", "effectiveSwitcherStyle", (IMP)hook_switcherStyle, (IMP *)&orig_switcherStyle);
+            HookMsg("SBAppSwitcherSettings", "switcherStyle", (IMP)hook_switcherStyleRaw, (IMP *)&orig_switcherStyleRaw);
+            HookMsg("SBAppSwitcherSettings", "setSwitcherStyle:", (IMP)hook_setSwitcherStyle, (IMP *)&orig_setSwitcherStyle);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherVerticalNaturalSpacingPortrait", (IMP)hook_gridVSpacing, (IMP *)&orig_gridVSpacing);
