@@ -423,21 +423,39 @@ static UIButton *SBXMakeButton(void) {
     [b insertSubview:blur atIndex:0];
     b.titleLabel.font = [UIFont systemFontOfSize:font weight:UIFontWeightMedium];
     b.tintColor = UIColor.labelColor;
-    UIImage *clearIcon = [UIImage systemImageNamed:@"trash.slash.circle"];
-    if (!clearIcon) clearIcon = [UIImage systemImageNamed:@"trash"];
+    NSString *symbolName = @"trash.slash.circle";
+    UIImage *clearIcon = [UIImage systemImageNamed:symbolName];
+    if (!clearIcon) {
+        symbolName = @"trash";
+        clearIcon = [UIImage systemImageNamed:symbolName];
+    }
     if (clearIcon) {
         UIImageSymbolConfiguration *cfg =
             [UIImageSymbolConfiguration configurationWithPointSize:font
                                                               weight:UIImageSymbolWeightMedium
                                                                scale:UIImageSymbolScaleMedium];
         clearIcon = [clearIcon imageWithConfiguration:cfg] ?: clearIcon;
-        [b setImage:clearIcon forState:UIControlStateNormal];
-        b.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        clearIcon = [clearIcon imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        // 独立前景图层不影响 UIButton 命中测试，避免系统按钮子视图被材质层盖住。
+        UIImageView *iv = [[UIImageView alloc] initWithImage:clearIcon];
+        iv.translatesAutoresizingMaskIntoConstraints = NO;
+        iv.userInteractionEnabled = NO;
+        iv.contentMode = UIViewContentModeScaleAspectFit;
+        iv.tintColor = UIColor.labelColor;
+        [b addSubview:iv];
+        [NSLayoutConstraint activateConstraints:@[
+            [iv.centerXAnchor constraintEqualToAnchor:b.centerXAnchor],
+            [iv.centerYAnchor constraintEqualToAnchor:b.centerYAnchor],
+            [iv.widthAnchor constraintEqualToConstant:font],
+            [iv.heightAnchor constraintEqualToConstant:font],
+        ]];
+        [b bringSubviewToFront:iv];
         b.accessibilityLabel = @"清除";
+        SBXLog(@"清除按钮图标：%@（字号 %.1f）", symbolName, font);
     } else {
-        // 极旧系统找不到 SF Symbol 时保留文字回退。
         [b setTitle:@"清除" forState:UIControlStateNormal];
         [b setTitleColor:UIColor.labelColor forState:UIControlStateNormal];
+        SBXLog(@"清除按钮图标：系统符号不可用，回退文字");
     }
     if (!gTarget) gTarget = [SBXButtonTarget new];
     [b addTarget:gTarget action:NSSelectorFromString(@"handleClear:") forControlEvents:UIControlEventTouchUpInside];
@@ -639,11 +657,16 @@ static void hook_swSettingsDefaults(id self, SEL _cmd) {
 // 这些入口属于 SystemBox 的其它独立功能；在这里透传也没有价值，反而扩大 App→Home 风险面。
 
 #pragma mark - ============ C. iPad 悬浮 Dock ============
-// SystemBox 挂的是 C 函数，不是 SBFloatingDockController 类方法。
+// 优先使用原版的 C 函数；目标系统不暴露该符号时，回退至 1.0.2 已挂上的类方法。
 static BOOL (*orig_isFloatingDockSupportedFunc)(void);
 static BOOL hook_isFloatingDockSupportedFunc(void) {
     if (DockOn()) return YES;
     return orig_isFloatingDockSupportedFunc ? orig_isFloatingDockSupportedFunc() : NO;
+}
+static BOOL (*orig_isFloatingDockSupportedClass)(id, SEL);
+static BOOL hook_isFloatingDockSupportedClass(id self, SEL _cmd) {
+    if (DockOn()) return YES;
+    return orig_isFloatingDockSupportedClass ? orig_isFloatingDockSupportedClass(self, _cmd) : NO;
 }
 static BOOL SBXRecentsWanted(void) {
     NSInteger c = (NSInteger)SBXNum(@"dockContent", 0, 0, 3);
@@ -882,7 +905,17 @@ __attribute__((constructor)) static void SBXInit(void) {
                           (void **)&orig_isFloatingDockSupportedFunc);
                 SBXLog(@"已挂 C 函数 isFloatingDockSupported");
             } else {
-                SBXLog(@"找不到 C 函数 isFloatingDockSupported");
+                SBXLog(@"C 函数不可用，尝试 1.0.2 的类方法");
+                Class dockCls = objc_getClass("SBFloatingDockController");
+                SEL cs = NSSelectorFromString(@"isFloatingDockSupported");
+                if (dockCls && class_getClassMethod(dockCls, cs)) {
+                    gHookMsgEx(object_getClass((id)dockCls), cs,
+                               (IMP)hook_isFloatingDockSupportedClass,
+                               (IMP *)&orig_isFloatingDockSupportedClass);
+                    SBXLog(@"已挂类方法 +[SBFloatingDockController isFloatingDockSupported]");
+                } else {
+                    SBXLog(@"类方法不存在：+[SBFloatingDockController isFloatingDockSupported]");
+                }
             }
             HookMsg("SBFloatingDockDefaults", "recentsEnabled", (IMP)hook_recentsEnabled, (IMP *)&orig_recentsEnabled);
             HookMsg("SBFloatingDockDefaults", "setRecentsEnabled:", (IMP)hook_setRecentsEnabled, (IMP *)&orig_setRecentsEnabled);

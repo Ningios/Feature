@@ -1,6 +1,6 @@
 Package: com.ning.feature
 Name: Feature
-Version: 1.0.3
+Version: 1.0.4
 Architecture: iphoneos-arm64e
 Description: 桌面功能（从 SystemX 拆出：后台一键清除按钮 / iPad 卡片后台 / iPad 悬浮 Dock）
 Maintainer: Ning
