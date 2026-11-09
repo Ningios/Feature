@@ -422,8 +422,10 @@ static UIButton *SBXMakeButton(void) {
     blur.layer.cornerRadius = r; blur.layer.cornerCurve = kCACornerCurveContinuous; blur.clipsToBounds = YES;
     [b insertSubview:blur atIndex:0];
     b.titleLabel.font = [UIFont systemFontOfSize:font weight:UIFontWeightMedium];
-    b.tintColor = UIColor.labelColor;
-    NSString *symbolName = @"trash.slash.circle";
+    b.tintColor = UIColor.whiteColor;
+    // 图四参考：白色、无斜杠的圆圈垃圾桶；默认可见直径约为按钮高度的 58%。
+    CGFloat iconSide = MIN(font * 1.65, h * 0.72);
+    NSString *symbolName = @"trash.circle";
     UIImage *clearIcon = [UIImage systemImageNamed:symbolName];
     if (!clearIcon) {
         symbolName = @"trash";
@@ -431,7 +433,7 @@ static UIButton *SBXMakeButton(void) {
     }
     if (clearIcon) {
         UIImageSymbolConfiguration *cfg =
-            [UIImageSymbolConfiguration configurationWithPointSize:font
+            [UIImageSymbolConfiguration configurationWithPointSize:iconSide
                                                               weight:UIImageSymbolWeightMedium
                                                                scale:UIImageSymbolScaleMedium];
         clearIcon = [clearIcon imageWithConfiguration:cfg] ?: clearIcon;
@@ -441,20 +443,20 @@ static UIButton *SBXMakeButton(void) {
         iv.translatesAutoresizingMaskIntoConstraints = NO;
         iv.userInteractionEnabled = NO;
         iv.contentMode = UIViewContentModeScaleAspectFit;
-        iv.tintColor = UIColor.labelColor;
+        iv.tintColor = UIColor.whiteColor;
         [b addSubview:iv];
         [NSLayoutConstraint activateConstraints:@[
             [iv.centerXAnchor constraintEqualToAnchor:b.centerXAnchor],
             [iv.centerYAnchor constraintEqualToAnchor:b.centerYAnchor],
-            [iv.widthAnchor constraintEqualToConstant:font],
-            [iv.heightAnchor constraintEqualToConstant:font],
+            [iv.widthAnchor constraintEqualToConstant:iconSide],
+            [iv.heightAnchor constraintEqualToConstant:iconSide],
         ]];
         [b bringSubviewToFront:iv];
         b.accessibilityLabel = @"清除";
-        SBXLog(@"清除按钮图标：%@（字号 %.1f）", symbolName, font);
+        SBXLog(@"清除按钮图标：%@（设置 %.1f，实际图层 %.1f）", symbolName, font, iconSide);
     } else {
         [b setTitle:@"清除" forState:UIControlStateNormal];
-        [b setTitleColor:UIColor.labelColor forState:UIControlStateNormal];
+        [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
         SBXLog(@"清除按钮图标：系统符号不可用，回退文字");
     }
     if (!gTarget) gTarget = [SBXButtonTarget new];
@@ -782,11 +784,8 @@ static void SBXApplyDockList(id list, double scale) {
     if ([list respondsToSelector:e]) {
         void (^block)(id) = ^(id iconView) {
             if (!iconView) return;
+            // 只保留原有标记，不对系统已经布局的图标再叠加缩放。
             objc_setAssociatedObject(iconView, "SBXDockScale", @(scale), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            if ([iconView respondsToSelector:NSSelectorFromString(@"setTransform:")]) {
-                CGAffineTransform t = CGAffineTransformMakeScale(scale, scale);
-                ((void (*)(id, SEL, CGAffineTransform))objc_msgSend)(iconView, NSSelectorFromString(@"setTransform:"), t);
-            }
         };
         ((void (*)(id, SEL, id))objc_msgSend)(list, e, block);
     }
@@ -815,10 +814,11 @@ static void hook_dockViewLayout(id self, SEL _cmd) {
     double s = SBXDockScale(self);
     SBXApplyDockList(SBXIdCall(self, @"userIconListView"), s);
     SBXApplyDockList(SBXIdCall(self, @"recentIconListView"), s);
-    id accessory = SBXIdCall(self, @"accessoryIconView");
-    if (accessory && [accessory respondsToSelector:NSSelectorFromString(@"setTransform:")]) {
-        CGAffineTransform t = CGAffineTransformMakeScale(s, s);
-        ((void (*)(id, SEL, CGAffineTransform))objc_msgSend)(accessory, NSSelectorFromString(@"setTransform:"), t);
+    // 附件图标同样交给系统布局，避免对它再做一次缩放。
+    static BOOL loggedScale = NO;
+    if (!loggedScale) {
+        loggedScale = YES;
+        SBXLog(@"Dock：系统 iconContentScale=%.3f，插件不额外缩放图标", s);
     }
 }
 static void (*orig_suggVisible)(id, SEL);

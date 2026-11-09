@@ -86,7 +86,7 @@ def main():
         (control / "control").write_text(
             "Package: com.ning.feature\n"
             "Name: Feature\n"
-            "Version: 1.0.4\n"
+            "Version: 1.0.5\n"
             "Architecture: iphoneos-arm64e\n"
             "Description: Desktop features\n"
             "Maintainer: Ning\n"
