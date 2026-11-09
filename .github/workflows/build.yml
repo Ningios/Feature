@@ -82,8 +82,7 @@ jobs:
         run: |
           set -eo pipefail
           python3 tools/ci_package.py --artifacts "$PWD" --output Feature-1.0.1_iphoneos-arm64e.deb
-          dpkg-deb -c Feature-1.0.1_iphoneos-arm64e.deb
-          dpkg-deb -I Feature-1.0.1_iphoneos-arm64e.deb
+          python3 tools/ci_validate_deb.py Feature-1.0.1_iphoneos-arm64e.deb
           sha256sum Feature-1.0.1_iphoneos-arm64e.deb
 
       - name: Upload
