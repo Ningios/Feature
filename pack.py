@@ -6,7 +6,7 @@ import os, shutil, subprocess, hashlib, sys
 
 BASE = "/var/minis/shared/sbx-split/desktop"
 ART  = sys.argv[1] if len(sys.argv) > 1 else "/tmp/build_local"
-OUT  = "/var/minis/attachments/Feature-1.0.6_iphoneos-arm64e.deb"
+OUT  = "/var/minis/attachments/Feature-1.0.7_iphoneos-arm64e.deb"
 W    = "/tmp/feature-pack"
 
 shutil.rmtree(W, ignore_errors=True)
@@ -72,7 +72,7 @@ Section: Tweaks
 Installed-Size: 600
 Maintainer: Ning
 Architecture: iphoneos-arm64e
-Version: 1.0.6
+Version: 1.0.7
 Depends: mobilesubstrate, preferenceloader, firmware (>= 16.0), firmware (<< 18.0)
 Description: 桌面功能（从 SystemX 拆出：后台一键清除按钮 / iPad 卡片后台 / iPad 悬浮 Dock）
 Name: Feature

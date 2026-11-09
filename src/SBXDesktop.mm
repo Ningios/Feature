@@ -219,7 +219,9 @@ static UIButton *SBXButtonForOwner(id owner) {
 static void SBXAttachGlass(UIButton *b, BOOL force);
 static BOOL SBXHasAppLayouts(void);   // 前置声明
 
-static void SBXSetButtonVisible(BOOL vis) {
+static void SBXSetButtonVisible(BOOL vis, const char *source, id origin) {
+    BOOL requested = vis;
+    BOOL previouslyShown = gButtonShown;
     if (!vis) gButtonGeneration++;
     if (vis && (!ClearOn() || gButtonUsed)) vis = NO;
     gButtonShown = vis;
@@ -228,20 +230,35 @@ static void SBXSetButtonVisible(BOOL vis) {
         UIButton *b = SBXFindButton();
         if (b) { SBXRegisterButton(b, nil); buttons = [SBXButtonTable() allObjects]; }
     }
-    if (!buttons.count) {
-        SBXLog(@"按钮%@（未找到）", vis ? @"显示" : @"隐藏");
-        return;
-    }
-    gButtonShown = vis;
+    NSUInteger inWindow = 0;
+    BOOL needsChange = NO;
+    UIButton *sample = nil;
     for (UIButton *b in buttons) {
         if (!b) continue;
+        sample = b;
+        if (b.window) inWindow++;
+        if (b.hidden == vis || (vis ? b.alpha < 0.99 : b.alpha > 0.01)) needsChange = YES;
         [b.layer removeAllAnimations];
         b.transform = CGAffineTransformIdentity;
         b.alpha = vis ? 1.0 : 0.0;
         b.hidden = !vis;
     }
-    SBXLog(@"按钮%@", vis ? @"显示" : @"隐藏");
-    if (vis) {
+    // 每个来源各自限频；实际状态变化和显示失败始终记录。
+    static NSMutableDictionary<NSString *, NSNumber *> *lastBySource = nil;
+    if (!lastBySource) lastBySource = [NSMutableDictionary dictionary];
+    NSString *sourceKey = [NSString stringWithUTF8String:source];
+    CFTimeInterval now = CACurrentMediaTime();
+    NSNumber *last = lastBySource[sourceKey];
+    BOOL anomalous = requested && (!vis || !inWindow);
+    BOOL shouldLog = needsChange || previouslyShown != vis || anomalous || !last || now - last.doubleValue >= 1.0;
+    if (shouldLog) {
+        lastBySource[sourceKey] = @(now);
+        SBXLog(@"按钮状态 来源=%s 事件对象=%p 请求=%d 实际=%d 已点=%d 代次=%lu 数量=%lu 在窗=%lu 按钮=%p 按钮隐藏=%d",
+               source, (__bridge void *)origin, requested, vis, gButtonUsed,
+               (unsigned long)gButtonGeneration, (unsigned long)buttons.count,
+               (unsigned long)inWindow, (__bridge void *)sample, sample ? sample.hidden : -1);
+    }
+    if (vis && buttons.count) {
         NSUInteger gen = gButtonGeneration;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.18 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             if (gen != gButtonGeneration || gButtonUsed || !ClearOn()) return;
@@ -251,37 +268,46 @@ static void SBXSetButtonVisible(BOOL vis) {
     }
 }
 
-static void SBXShowClearButtons(void) {
-    if (!ClearOn() || gButtonUsed) return;
-    SBXSetButtonVisible(YES);
+static void SBXShowClearButtons(const char *source, id origin) {
+    if (!ClearOn() || gButtonUsed) {
+        SBXLog(@"按钮显示被拒 来源=%s 事件对象=%p 已点=%d 代次=%lu", source,
+               (__bridge void *)origin, gButtonUsed, (unsigned long)gButtonGeneration);
+        return;
+    }
+    SBXSetButtonVisible(YES, source, origin);
 }
 
-static void SBXScheduleClearButtons(UIView *view, NSTimeInterval delay) {
+static void SBXScheduleClearButtons(UIView *view, NSTimeInterval delay, const char *source) {
     if (!ClearOn() || !view || view.window == nil || gButtonUsed) return;
     NSUInteger gen = gButtonGeneration;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (gen != gButtonGeneration || view.window == nil || !ClearOn() || gButtonUsed) return;
-        SBXShowClearButtons();
+        if (gen != gButtonGeneration || view.window == nil || !ClearOn() || gButtonUsed) {
+            // 避免频繁转场时刷满日志；记录代次、窗口和点击状态供定位。
+            static CFTimeInterval lastDropLog = 0;
+            CFTimeInterval now = CACurrentMediaTime();
+            if (now - lastDropLog >= 0.5) {
+                lastDropLog = now;
+                SBXLog(@"按钮延迟任务取消 来源=%s 对象=%p 原代次=%lu 现代次=%lu 在窗=%d 已点=%d",
+                       source, (__bridge void *)view, (unsigned long)gen,
+                       (unsigned long)gButtonGeneration, view.window != nil, gButtonUsed);
+            }
+            return;
+        }
+        SBXShowClearButtons(source, view);
     });
 }
 
-static void SBXRemoveButton(UIButton *b) {
+// 与 SBX 一样仅移除传入对象关联的按钮；没有关联时不动其他按钮。
+static void SBXRemoveAssociatedButton(id owner, const char *source) {
+    if (!owner) return;
+    UIButton *b = objc_getAssociatedObject(owner, &kButtonKey);
     if (!b) return;
-    gButtonGeneration++;
-    gButtonShown = NO;
+    SBXLog(@"按钮移除 来源=%s 持有对象=%p 按钮=%p 在窗=%d", source,
+           (__bridge void *)owner, (__bridge void *)b, b.window != nil);
     [b.layer removeAllAnimations];
     [b removeFromSuperview];
     [SBXButtonTable() removeObject:b];
-}
-
-static void SBXRemoveAllButtons(void) {
-    gButtonGeneration++;
-    gButtonShown = NO;
-    for (UIButton *b in [SBXButtonTable() allObjects]) {
-        [b.layer removeAllAnimations];
-        [b removeFromSuperview];
-    }
-    [SBXButtonTable() removeAllObjects];
+    objc_setAssociatedObject(owner, &kButtonKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 // 是否还有后台卡片（没有卡片时不该显示清除按钮）
@@ -319,7 +345,7 @@ static NSString *SBXNowPlaying(void) {
 
 static void SBXKillAll(void) {
     gButtonUsed = YES;
-    SBXSetButtonVisible(NO);
+    SBXSetButtonVisible(NO, "clear-tap", nil);
     id coord = SBXClassCall(NSClassFromString(@"SBMainSwitcherControllerCoordinator"), @"sharedInstanceIfExists");
     if (!coord) coord = SBXClassCall(NSClassFromString(@"SBAppSwitcherController"), @"sharedInstanceIfExists");
     if (!coord) { SBXLog(@"清除：找不到控制器"); return; }
@@ -513,7 +539,10 @@ static UIButton *SBXEnsureButtonForController(UIViewController *vc) {
         [b.heightAnchor constraintEqualToConstant:b.bounds.size.height],
     ]];
     SBXRegisterButton(b, vc);
-    SBXLog(@"viewDidLoad：已创建按钮 %.0fx%.0f 底距 %.0f", b.bounds.size.width, b.bounds.size.height, SBXNum(@"clearBottomOffset", 60, 0, 300));
+    SBXLog(@"按钮创建 控制器=%p 按钮=%p 已点=%d 代次=%lu 在窗=%d 隐藏=%d 尺寸=%.0fx%.0f 底距=%.0f",
+           (__bridge void *)vc, (__bridge void *)b, gButtonUsed, (unsigned long)gButtonGeneration,
+           b.window != nil, b.hidden, b.bounds.size.width, b.bounds.size.height,
+           SBXNum(@"clearBottomOffset", 60, 0, 300));
     return b;
 }
 
@@ -535,13 +564,15 @@ static void hook_switcherLayout(id self, SEL _cmd) {
 static void (*orig_vcWillAppear)(id, SEL, BOOL);
 static void hook_vcWillAppear(id self, SEL _cmd, BOOL animated) {
     if (orig_vcWillAppear) orig_vcWillAppear(self, _cmd, animated);
+    SBXLog(@"切换器将出现 控制器=%p 重置前已点=%d 代次=%lu", (__bridge void *)self,
+           gButtonUsed, (unsigned long)gButtonGeneration);
     gButtonUsed = NO;
     if (![self isKindOfClass:UIViewController.class]) return;
     UIViewController *vc = (UIViewController *)self;
     UIButton *b = SBXEnsureButtonForController(vc);
     if (b && ClearOn()) {
         SBXRegisterButton(b, vc);
-        SBXShowClearButtons();
+        SBXShowClearButtons("vc-will-appear", vc);
     }
 }
 
@@ -549,24 +580,15 @@ static void hook_vcWillAppear(id self, SEL _cmd, BOOL animated) {
 static void (*orig_vcWillDisappear)(id, SEL, BOOL);
 static void hook_vcWillDisappear(id self, SEL _cmd, BOOL animated) {
     if (orig_vcWillDisappear) orig_vcWillDisappear(self, _cmd, animated);
-    SBXSetButtonVisible(NO);
-    SBXLog(@"切换器 viewWillDisappear：已请求隐藏按钮");
+    SBXSetButtonVisible(NO, "vc-will-disappear", self);
 }
 
 // 完全离开后，只移除这个控制器关联的按钮，并清掉关联。
 static void (*orig_vcDidDisappear)(id, SEL, BOOL);
 static void hook_vcDidDisappear(id self, SEL _cmd, BOOL animated) {
     if (orig_vcDidDisappear) orig_vcDidDisappear(self, _cmd, animated);
-    SBXSetButtonVisible(NO);
-    UIButton *b = objc_getAssociatedObject(self, &kButtonKey);
-    if (b) {
-        // 隐藏时已推进代次；这里仅清理当前控制器的关联按钮。
-        [b.layer removeAllAnimations];
-        [b removeFromSuperview];
-        [SBXButtonTable() removeObject:b];
-        objc_setAssociatedObject(self, &kButtonKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    SBXLog(@"切换器 viewDidDisappear：关联按钮%@", b ? @"已移除" : @"不存在");
+    SBXSetButtonVisible(NO, "vc-did-disappear", self);
+    SBXRemoveAssociatedButton(self, "vc-did-disappear");
 }
 
 // 转场：DidBegin 纯透传；WillEnd/DidEnd 后若切换器可见则显示
@@ -577,22 +599,22 @@ static void hook_trBegin(id self, SEL _cmd, id coord, id ctx) {
 static void (*orig_trWillEnd)(id, SEL, id, id);
 static void hook_trWillEnd(id self, SEL _cmd, id coord, id ctx) {
     if (orig_trWillEnd) orig_trWillEnd(self, _cmd, coord, ctx);
-    if (ClearOn() && SBXAnySwitcherVisible()) SBXSetButtonVisible(YES);
+    if (ClearOn() && SBXAnySwitcherVisible()) SBXSetButtonVisible(YES, "transition-will-end", self);
 }
 static void (*orig_trDidEnd)(id, SEL, id, id);
 static void hook_trDidEnd(id self, SEL _cmd, id coord, id ctx) {
     if (orig_trDidEnd) orig_trDidEnd(self, _cmd, coord, ctx);
-    if (ClearOn() && SBXAnySwitcherVisible()) SBXSetButtonVisible(YES);
+    if (ClearOn() && SBXAnySwitcherVisible()) SBXSetButtonVisible(YES, "transition-did-end", self);
 }
 // dismiss*：先隐藏再调原实现（顺序不能反）
 static void (*orig_dismissMain)(id, SEL, BOOL);
 static void hook_dismissMain(id self, SEL _cmd, BOOL animated) {
-    SBXSetButtonVisible(NO);
+    SBXSetButtonVisible(NO, "dismiss-main", self);
     if (orig_dismissMain) orig_dismissMain(self, _cmd, animated);
 }
 static void (*orig_dismissAll)(id, SEL, BOOL);
 static void hook_dismissAll(id self, SEL _cmd, BOOL animated) {
-    SBXSetButtonVisible(NO);
+    SBXSetButtonVisible(NO, "dismiss-all", self);
     if (orig_dismissAll) orig_dismissAll(self, _cmd, animated);
 }
 // 后台滚动视图：原版离窗拆除；入窗后延迟显示，不主动改变外观。
@@ -602,19 +624,20 @@ static void hook_scrollDidMove(id self, SEL _cmd) {
     if (!ClearOn() || ![self isKindOfClass:UIView.class]) return;
     UIView *v = (UIView *)self;
     if (!v.window) {
-        SBXRemoveAllButtons();
-        SBXSetButtonVisible(NO);
+        // 对齐 SBX：只处理当前滚动视图自身持有的关联按钮。
+        SBXRemoveAssociatedButton(v, "scroll-detach");
+        SBXSetButtonVisible(NO, "scroll-detach", v);
         return;
     }
-    SBXScheduleClearButtons(v, 0.08);
-    SBXScheduleClearButtons(v, 0.18);
+    SBXScheduleClearButtons(v, 0.08, "scroll-attach-0.08");
+    SBXScheduleClearButtons(v, 0.18, "scroll-attach-0.18");
 }
 static void (*orig_setScrollEnabled)(id, SEL, BOOL);
 static void hook_setScrollEnabled(id self, SEL _cmd, BOOL enabled) {
     if (orig_setScrollEnabled) orig_setScrollEnabled(self, _cmd, enabled);
     if (!ClearOn()) return;
-    if (!enabled) { SBXSetButtonVisible(NO); return; }
-    if ([self isKindOfClass:UIView.class]) SBXScheduleClearButtons((UIView *)self, 0.03);
+    if (!enabled) { SBXSetButtonVisible(NO, "scroll-disabled", self); return; }
+    if ([self isKindOfClass:UIView.class]) SBXScheduleClearButtons((UIView *)self, 0.03, "scroll-enabled-0.03");
 }
 
 
