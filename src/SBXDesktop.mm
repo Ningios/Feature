@@ -177,7 +177,21 @@ typedef struct { vector_float4 viewport, geometry, optical, appearance, tint, in
 
 #pragma mark - ============ A. 后台一键清除按钮 ============
 
+static char kButtonKey;
+static NSHashTable *gButtons = nil;
+static NSUInteger gButtonGeneration = 0;
+// 对应 SystemBox 的“本轮已点击/已显示过”状态；viewWillAppear 会重置。
+static BOOL gButtonUsed = NO;
+static BOOL gButtonShown = NO;
+
+static NSHashTable *SBXButtonTable(void) {
+    if (!gButtons) gButtons = [NSHashTable weakObjectsHashTable];
+    return gButtons;
+}
+
 static UIButton *SBXFindButton(void) {
+    for (UIButton *b in [SBXButtonTable() allObjects])
+        if (b && b.superview) return b;
     for (UIScene *sc in [UIApplication sharedApplication].connectedScenes) {
         if (![sc isKindOfClass:UIWindowScene.class]) continue;
         for (UIWindow *w in [(UIWindowScene *)sc windows]) {
@@ -187,26 +201,87 @@ static UIButton *SBXFindButton(void) {
     }
     return nil;
 }
+
+static void SBXRegisterButton(UIButton *b, id owner) {
+    if (!b) return;
+    [SBXButtonTable() addObject:b];
+    if (owner) objc_setAssociatedObject(owner, &kButtonKey, b, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static UIButton *SBXButtonForOwner(id owner) {
+    UIButton *b = owner ? objc_getAssociatedObject(owner, &kButtonKey) : nil;
+    if (!b && [owner isKindOfClass:UIViewController.class])
+        b = [((UIViewController *)owner).view viewWithTag:kBtnTag];
+    if (b) SBXRegisterButton(b, owner);
+    return b;
+}
+
 static void SBXAttachGlass(UIButton *b, BOOL force);
 static BOOL SBXHasAppLayouts(void);   // 前置声明
 
 static void SBXSetButtonVisible(BOOL vis) {
-    static double lastTime = 0; static BOOL lastVis = YES;
-    double now = [NSDate date].timeIntervalSince1970;
-    if (vis == lastVis && now - lastTime < 0.4) return;    // 去抖，避免转场里反复切
-    lastTime = now; lastVis = vis;
-    UIButton *b = SBXFindButton();
-    if (!b) { SBXLog(@"按钮%@（未找到）", vis ? @"显示" : @"隐藏"); return; }
-    if (b.hidden == !vis) { /* 状态未变 */ }
-    b.hidden = !vis;
+    if (!vis) gButtonGeneration++;
+    if (vis && (!ClearOn() || gButtonUsed)) vis = NO;
+    gButtonShown = vis;
+    NSArray *buttons = [SBXButtonTable() allObjects];
+    if (!buttons.count) {
+        UIButton *b = SBXFindButton();
+        if (b) { SBXRegisterButton(b, nil); buttons = [SBXButtonTable() allObjects]; }
+    }
+    if (!buttons.count) {
+        SBXLog(@"按钮%@（未找到）", vis ? @"显示" : @"隐藏");
+        return;
+    }
+    gButtonShown = vis;
+    for (UIButton *b in buttons) {
+        if (!b) continue;
+        [b.layer removeAllAnimations];
+        b.transform = CGAffineTransformIdentity;
+        b.alpha = vis ? 1.0 : 0.0;
+        b.hidden = !vis;
+    }
     SBXLog(@"按钮%@", vis ? @"显示" : @"隐藏");
-    if (vis && !SBXHasAppLayouts()) { b.hidden = YES; SBXLog(@"没有后台卡片 → 不显示按钮"); return; }
     if (vis) {
+        NSUInteger gen = gButtonGeneration;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.18 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            UIButton *bb = SBXFindButton();
-            if (bb) SBXAttachGlass(bb, YES);   // 显示后再截底图（viewDidLoad 时是黑的）
+            if (gen != gButtonGeneration || gButtonUsed || !ClearOn()) return;
+            for (UIButton *b in [SBXButtonTable() allObjects])
+                if (b) SBXAttachGlass(b, YES);
         });
     }
+}
+
+static void SBXShowClearButtons(void) {
+    if (!ClearOn() || gButtonUsed) return;
+    SBXSetButtonVisible(YES);
+}
+
+static void SBXScheduleClearButtons(UIView *view, NSTimeInterval delay) {
+    if (!ClearOn() || !view || view.window == nil || gButtonUsed) return;
+    NSUInteger gen = gButtonGeneration;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (gen != gButtonGeneration || view.window == nil || !ClearOn() || gButtonUsed) return;
+        SBXShowClearButtons();
+    });
+}
+
+static void SBXRemoveButton(UIButton *b) {
+    if (!b) return;
+    gButtonGeneration++;
+    gButtonShown = NO;
+    [b.layer removeAllAnimations];
+    [b removeFromSuperview];
+    [SBXButtonTable() removeObject:b];
+}
+
+static void SBXRemoveAllButtons(void) {
+    gButtonGeneration++;
+    gButtonShown = NO;
+    for (UIButton *b in [SBXButtonTable() allObjects]) {
+        [b.layer removeAllAnimations];
+        [b removeFromSuperview];
+    }
+    [SBXButtonTable() removeAllObjects];
 }
 
 // 是否还有后台卡片（没有卡片时不该显示清除按钮）
@@ -243,6 +318,8 @@ static NSString *SBXNowPlaying(void) {
 }
 
 static void SBXKillAll(void) {
+    gButtonUsed = YES;
+    SBXSetButtonVisible(NO);
     id coord = SBXClassCall(NSClassFromString(@"SBMainSwitcherControllerCoordinator"), @"sharedInstanceIfExists");
     if (!coord) coord = SBXClassCall(NSClassFromString(@"SBAppSwitcherController"), @"sharedInstanceIfExists");
     if (!coord) { SBXLog(@"清除：找不到控制器"); return; }
@@ -311,18 +388,6 @@ static void SBXKillAll(void) {
         delFn(coord, delSel, bid); killed++;
     }
     SBXLog(@"清除完成：清除 %lu 跳过 %lu（保留播放=%@）", (unsigned long)killed, (unsigned long)skipped, nowPlaying ?: @"无");
-    SBXSetButtonVisible(NO);   // 清完立刻收按钮（不等下一次布局事件）
-    // 兜底：直接把切换器收起（有些卡片已不在 recentAppLayouts 里）
-    for (NSString *dn in @[@"dismissAllSwitchersNoninteractivelyAnimated:",
-                           @"dismissMainSwitcherNoninteractivelyAnimated:"]) {
-        SEL ds = NSSelectorFromString(dn);
-        if ([coord respondsToSelector:ds]) {
-            void (*df)(id, SEL, BOOL) = (void (*)(id, SEL, BOOL))objc_msgSend;
-            df(coord, ds, YES);
-            SBXLog(@"兜底：%@", dn);
-            break;
-        }
-    }
 }
 
 @interface SBXButtonTarget : NSObject
@@ -333,6 +398,8 @@ static void SBXKillAll(void) {
     UIImpactFeedbackGenerator *g = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [g prepare]; [g impactOccurred];
     SBXKillAll();
+    // SystemBox 点击后保留一个轻微收缩状态；不改按钮的静态尺寸/高度/位置。
+    sender.transform = CGAffineTransformMakeScale(0.94, 0.94);
 }
 @end
 static SBXButtonTarget *gTarget = nil;
@@ -355,8 +422,23 @@ static UIButton *SBXMakeButton(void) {
     blur.layer.cornerRadius = r; blur.layer.cornerCurve = kCACornerCurveContinuous; blur.clipsToBounds = YES;
     [b insertSubview:blur atIndex:0];
     b.titleLabel.font = [UIFont systemFontOfSize:font weight:UIFontWeightMedium];
-    [b setTitle:@"清除" forState:UIControlStateNormal];
-    [b setTitleColor:UIColor.labelColor forState:UIControlStateNormal];
+    b.tintColor = UIColor.labelColor;
+    UIImage *clearIcon = [UIImage systemImageNamed:@"trash.slash.circle"];
+    if (!clearIcon) clearIcon = [UIImage systemImageNamed:@"trash"];
+    if (clearIcon) {
+        UIImageSymbolConfiguration *cfg =
+            [UIImageSymbolConfiguration configurationWithPointSize:font
+                                                              weight:UIImageSymbolWeightMedium
+                                                               scale:UIImageSymbolScaleMedium];
+        clearIcon = [clearIcon imageWithConfiguration:cfg] ?: clearIcon;
+        [b setImage:clearIcon forState:UIControlStateNormal];
+        b.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        b.accessibilityLabel = @"清除";
+    } else {
+        // 极旧系统找不到 SF Symbol 时保留文字回退。
+        [b setTitle:@"清除" forState:UIControlStateNormal];
+        [b setTitleColor:UIColor.labelColor forState:UIControlStateNormal];
+    }
     if (!gTarget) gTarget = [SBXButtonTarget new];
     [b addTarget:gTarget action:NSSelectorFromString(@"handleClear:") forControlEvents:UIControlEventTouchUpInside];
     return b;
@@ -396,42 +478,51 @@ static void SBXAttachGlass(UIButton *b, BOOL force) {
     SBXLog(@"按钮已套液态玻璃");
 }
 
-// viewDidLoad：建按钮（原版在此创建，hidden/alpha0）
-static void (*orig_switcherDidLoad)(id, SEL);
-static void hook_switcherDidLoad(id self, SEL _cmd) {
-    if (orig_switcherDidLoad) orig_switcherDidLoad(self, _cmd);
-    if (!ClearOn()) return;
-    if (![self isKindOfClass:UIViewController.class]) return;
-    UIViewController *vc = (UIViewController *)self;
-    if ([vc.view viewWithTag:kBtnTag]) return;
-    double bottom = SBXNum(@"clearBottomOffset", 60, 0, 300);
-    UIButton *b = SBXMakeButton();
+// viewDidLoad：建按钮（外观保持 Feature 当前版本）
+static UIButton *SBXEnsureButtonForController(UIViewController *vc) {
+    if (!vc || !vc.view || !ClearOn()) return nil;
+    UIButton *b = SBXButtonForOwner(vc);
+    if (b && b.superview) return b;
+    b = SBXMakeButton();
     b.translatesAutoresizingMaskIntoConstraints = NO;
     [vc.view addSubview:b];
     [NSLayoutConstraint activateConstraints:@[
         [b.centerXAnchor constraintEqualToAnchor:vc.view.centerXAnchor],
-        [b.bottomAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.bottomAnchor constant:-bottom],
+        [b.bottomAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.bottomAnchor constant:-SBXNum(@"clearBottomOffset", 60, 0, 300)],
         [b.widthAnchor constraintEqualToConstant:b.bounds.size.width],
         [b.heightAnchor constraintEqualToConstant:b.bounds.size.height],
     ]];
-    SBXLog(@"viewDidLoad：已创建按钮 %.0fx%.0f 底距 %.0f", b.bounds.size.width, b.bounds.size.height, bottom);
+    SBXRegisterButton(b, vc);
+    SBXLog(@"viewDidLoad：已创建按钮 %.0fx%.0f 底距 %.0f", b.bounds.size.width, b.bounds.size.height, SBXNum(@"clearBottomOffset", 60, 0, 300));
+    return b;
+}
+
+static void (*orig_switcherDidLoad)(id, SEL);
+static void hook_switcherDidLoad(id self, SEL _cmd) {
+    if (orig_switcherDidLoad) orig_switcherDidLoad(self, _cmd);
+    if ([self isKindOfClass:UIViewController.class]) SBXEnsureButtonForController((UIViewController *)self);
 }
 
 static void (*orig_switcherLayout)(id, SEL);
 static void hook_switcherLayout(id self, SEL _cmd) {
     if (orig_switcherLayout) orig_switcherLayout(self, _cmd);
-    if (!ClearOn()) return;
-    if (![self isKindOfClass:UIViewController.class]) return;
-    UIViewController *vc = (UIViewController *)self;
-    UIButton *b = (UIButton *)[vc.view viewWithTag:kBtnTag];
+    if (!ClearOn() || ![self isKindOfClass:UIViewController.class]) return;
+    UIButton *b = SBXEnsureButtonForController((UIViewController *)self);
     if (b && b.bounds.size.width > 4 && !b.hidden) SBXAttachGlass(b, NO);
 }
 
-// viewWillAppear：原版在此显示按钮
+// viewWillAppear：原版在此重置本轮状态、确保按钮并显示
 static void (*orig_vcWillAppear)(id, SEL, BOOL);
 static void hook_vcWillAppear(id self, SEL _cmd, BOOL animated) {
     if (orig_vcWillAppear) orig_vcWillAppear(self, _cmd, animated);
-    if (ClearOn()) SBXSetButtonVisible(YES);
+    gButtonUsed = NO;
+    if (![self isKindOfClass:UIViewController.class]) return;
+    UIViewController *vc = (UIViewController *)self;
+    UIButton *b = SBXEnsureButtonForController(vc);
+    if (b && ClearOn()) {
+        SBXRegisterButton(b, vc);
+        SBXShowClearButtons();
+    }
 }
 
 // 转场：DidBegin 纯透传；WillEnd/DidEnd 后若切换器可见则显示
@@ -460,33 +551,26 @@ static void hook_dismissAll(id self, SEL _cmd, BOOL animated) {
     SBXSetButtonVisible(NO);
     if (orig_dismissAll) orig_dismissAll(self, _cmd, animated);
 }
-// 后台滚动视图：离开窗口 → 拆按钮并隐藏；否则若开着按钮功能，0.08s/0.18s 各隐藏一次
+// 后台滚动视图：原版离窗拆除；入窗后延迟显示，不主动改变外观。
 static void (*orig_scrollDidMove)(id, SEL);
 static void hook_scrollDidMove(id self, SEL _cmd) {
     if (orig_scrollDidMove) orig_scrollDidMove(self, _cmd);
-    if (!ClearOn()) return;
+    if (!ClearOn() || ![self isKindOfClass:UIView.class]) return;
     UIView *v = (UIView *)self;
-    if (![v isKindOfClass:UIView.class]) return;
-    if (v.window == nil) {
-        UIButton *b = SBXFindButton();
-        if (b) { [b removeFromSuperview]; SBXLog(@"后台滚动视图离开窗口：已拆按钮"); }
+    if (!v.window) {
+        SBXRemoveAllButtons();
+        SBXSetButtonVisible(NO);
         return;
     }
-    for (NSNumber *dn in @[@0.08, @0.18]) {
-        double d = [dn doubleValue];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (!SBXAnySwitcherVisible()) SBXSetButtonVisible(NO);
-        });
-    }
+    SBXScheduleClearButtons(v, 0.08);
+    SBXScheduleClearButtons(v, 0.18);
 }
 static void (*orig_setScrollEnabled)(id, SEL, BOOL);
 static void hook_setScrollEnabled(id self, SEL _cmd, BOOL enabled) {
     if (orig_setScrollEnabled) orig_setScrollEnabled(self, _cmd, enabled);
     if (!ClearOn()) return;
     if (!enabled) { SBXSetButtonVisible(NO); return; }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.03 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (!SBXAnySwitcherVisible()) SBXSetButtonVisible(NO);
-    });
+    if ([self isKindOfClass:UIView.class]) SBXScheduleClearButtons((UIView *)self, 0.03);
 }
 
 
@@ -555,10 +639,11 @@ static void hook_swSettingsDefaults(id self, SEL _cmd) {
 // 这些入口属于 SystemBox 的其它独立功能；在这里透传也没有价值，反而扩大 App→Home 风险面。
 
 #pragma mark - ============ C. iPad 悬浮 Dock ============
-static BOOL (*orig_isFloatingDockSupportedClass)(id, SEL);
-static BOOL hook_isFloatingDockSupportedClass(id self, SEL _cmd) {
+// SystemBox 挂的是 C 函数，不是 SBFloatingDockController 类方法。
+static BOOL (*orig_isFloatingDockSupportedFunc)(void);
+static BOOL hook_isFloatingDockSupportedFunc(void) {
     if (DockOn()) return YES;
-    return orig_isFloatingDockSupportedClass ? orig_isFloatingDockSupportedClass(self, _cmd) : NO;
+    return orig_isFloatingDockSupportedFunc ? orig_isFloatingDockSupportedFunc() : NO;
 }
 static BOOL SBXRecentsWanted(void) {
     NSInteger c = (NSInteger)SBXNum(@"dockContent", 0, 0, 3);
@@ -591,24 +676,51 @@ static void hook_updateDivider(id self, SEL _cmd) {
     if (DockOn() && SBXBool(@"hideSeparator", NO)) return;   // 原版：直接 return，不调原实现
     if (orig_updateDivider) orig_updateDivider(self, _cmd);
 }
+static id gDockController = nil;
 static id (*orig_dockInit)(id, SEL, id, id);
 static id hook_dockInit(id self, SEL _cmd, id winScene, id iconController) {
     id r = orig_dockInit ? orig_dockInit(self, _cmd, winScene, iconController) : nil;
+    if (r) gDockController = r;
     if (DockOn()) SBXLog(@"SBFloatingDockController init → %@", r ? @"建立" : @"nil");
     return r;
 }
 static id (*orig_dockWindow)(id, SEL);
 static id hook_dockWindow(id self, SEL _cmd) {
-    return orig_dockWindow ? orig_dockWindow(self, _cmd) : nil;
+    id r = orig_dockWindow ? orig_dockWindow(self, _cmd) : nil;
+    if (r) gDockController = self;
+    return r;
+}
+static BOOL SBXIsPresentingFolder(id o) {
+    return o && [o respondsToSelector:NSSelectorFromString(@"isPresentingFolder")] && SBXBoolCall(o, @"isPresentingFolder");
 }
 static double (*orig_translationVC)(id, SEL);
 static double hook_translationVC(id self, SEL _cmd) {
-    // 原版仅在"正在展示文件夹"时返回 0；其余透传，保留系统滑动动画
+    if (DockOn() && SBXIsPresentingFolder(self)) return 0.0;
     return orig_translationVC ? orig_translationVC(self, _cmd) : 0.0;
 }
 static double (*orig_translationCtl)(id, SEL);
 static double hook_translationCtl(id self, SEL _cmd) {
+    if (DockOn() && SBXIsPresentingFolder(self)) return 0.0;
     return orig_translationCtl ? orig_translationCtl(self, _cmd) : 0.0;
+}
+
+static BOOL (*orig_recentShouldAdd)(id, SEL, id, id);
+static BOOL hook_recentShouldAdd(id self, SEL _cmd, id controller, id item) {
+    if (DockOn()) {
+        id suggestion = SBXIdCall(self, @"currentAppSuggestion");
+        if (suggestion && [suggestion respondsToSelector:NSSelectorFromString(@"isHandoff")] && SBXBoolCall(suggestion, @"isHandoff")) return NO;
+    }
+    return orig_recentShouldAdd ? orig_recentShouldAdd(self, _cmd, controller, item) : NO;
+}
+static id (*orig_suggestInit8)(id, SEL, NSUInteger, id, id, id, id, id, id, id, id);
+static id hook_suggestInit8(id self, SEL _cmd, NSUInteger n, id a, id b, id c1, id d, id e, id f, id g, id h) {
+    NSUInteger nn = DockOn() ? (NSUInteger)SBXNum(@"dockRecentCount", 3, 1, 10) : n;
+    return orig_suggestInit8 ? orig_suggestInit8(self, _cmd, nn, a, b, c1, d, e, f, g, h) : nil;
+}
+static id (*orig_suggestInit7)(id, SEL, NSUInteger, id, id, id, id, id, id, id);
+static id hook_suggestInit7(id self, SEL _cmd, NSUInteger n, id a, id b, id c1, id d, id e, id f, id g) {
+    NSUInteger nn = DockOn() ? (NSUInteger)SBXNum(@"dockRecentCount", 3, 1, 10) : n;
+    return orig_suggestInit7 ? orig_suggestInit7(self, _cmd, nn, a, b, c1, d, e, f, g) : nil;
 }
 static BOOL (*orig_gesturePossible)(id, SEL);
 static BOOL hook_gesturePossible(id self, SEL _cmd) {
@@ -627,17 +739,93 @@ static unsigned long hook_maxSuggestions(id self, SEL _cmd) {
     if (DockOn()) return (unsigned long)SBXNum(@"dockRecentCount", 3, 1, 10);  // 原版用"最近使用数量"
     return orig_maxSuggestions ? orig_maxSuggestions(self, _cmd) : 3;
 }
+static void SBXHideDockPart(id v) {
+    if (!v) return;
+    if ([v respondsToSelector:NSSelectorFromString(@"setHidden:")])
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(v, NSSelectorFromString(@"setHidden:"), YES);
+    if ([v respondsToSelector:NSSelectorFromString(@"setAlpha:")])
+        ((void (*)(id, SEL, CGFloat))objc_msgSend)(v, NSSelectorFromString(@"setAlpha:"), 0.0);
+    if ([v respondsToSelector:NSSelectorFromString(@"setUserInteractionEnabled:")])
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(v, NSSelectorFromString(@"setUserInteractionEnabled:"), NO);
+}
+
+static void SBXApplyDockList(id list, double scale) {
+    if (!list) return;
+    if ([list respondsToSelector:NSSelectorFromString(@"setClipsToBounds:")])
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(list, NSSelectorFromString(@"setClipsToBounds:"), NO);
+    if ([list respondsToSelector:NSSelectorFromString(@"setMasksToBounds:")])
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(list, NSSelectorFromString(@"setMasksToBounds:"), NO);
+    SEL e = NSSelectorFromString(@"enumerateDisplayedIconViewsUsingBlock:");
+    if ([list respondsToSelector:e]) {
+        void (^block)(id) = ^(id iconView) {
+            if (!iconView) return;
+            objc_setAssociatedObject(iconView, "SBXDockScale", @(scale), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if ([iconView respondsToSelector:NSSelectorFromString(@"setTransform:")]) {
+                CGAffineTransform t = CGAffineTransformMakeScale(scale, scale);
+                ((void (*)(id, SEL, CGAffineTransform))objc_msgSend)(iconView, NSSelectorFromString(@"setTransform:"), t);
+            }
+        };
+        ((void (*)(id, SEL, id))objc_msgSend)(list, e, block);
+    }
+}
+
+static double SBXDockScale(id o) {
+    if (o && [o respondsToSelector:NSSelectorFromString(@"iconContentScale")]) {
+        double s = ((double (*)(id, SEL))objc_msgSend)(o, NSSelectorFromString(@"iconContentScale"));
+        if (s > 0.01) return s;
+    }
+    return 1.0;
+}
+
 static void (*orig_platterLayout)(id, SEL);
 static void hook_platterLayout(id self, SEL _cmd) {
     if (orig_platterLayout) orig_platterLayout(self, _cmd);
+    if (DockOn() && SBXBool(@"transparentDock", NO)) {
+        SBXHideDockPart(SBXIdCall(self, @"backgroundView"));
+        SBXHideDockPart(SBXIdCall(self, @"shadowView"));
+    }
 }
 static void (*orig_dockViewLayout)(id, SEL);
 static void hook_dockViewLayout(id self, SEL _cmd) {
     if (orig_dockViewLayout) orig_dockViewLayout(self, _cmd);
+    if (!DockOn()) return;
+    double s = SBXDockScale(self);
+    SBXApplyDockList(SBXIdCall(self, @"userIconListView"), s);
+    SBXApplyDockList(SBXIdCall(self, @"recentIconListView"), s);
+    id accessory = SBXIdCall(self, @"accessoryIconView");
+    if (accessory && [accessory respondsToSelector:NSSelectorFromString(@"setTransform:")]) {
+        CGAffineTransform t = CGAffineTransformMakeScale(s, s);
+        ((void (*)(id, SEL, CGAffineTransform))objc_msgSend)(accessory, NSSelectorFromString(@"setTransform:"), t);
+    }
 }
 static void (*orig_suggVisible)(id, SEL);
 static void hook_suggVisible(id self, SEL _cmd) {
     if (orig_suggVisible) orig_suggVisible(self, _cmd);
+    if (!DockOn()) return;
+    id list = SBXIdCall(self, @"listView");
+    if (list) SBXApplyDockList(list, SBXDockScale(list));
+}
+static void (*orig_dockListConfigure)(id, SEL, id, id);
+static void hook_dockListConfigure(id self, SEL _cmd, id iconView, id icon) {
+    if (orig_dockListConfigure) orig_dockListConfigure(self, _cmd, iconView, icon);
+    if (!DockOn() || !iconView) return;
+    objc_setAssociatedObject(iconView, "SBXDockScale", @(SBXDockScale(self)), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+static void (*orig_suggConfigure)(id, SEL, id, id);
+static void hook_suggConfigure(id self, SEL _cmd, id iconView, id icon) {
+    if (orig_suggConfigure) orig_suggConfigure(self, _cmd, iconView, icon);
+    if (!DockOn() || !iconView) return;
+    objc_setAssociatedObject(iconView, "SBXDockScale", @1.0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+static void (*orig_dockTrait)(id, SEL);
+static void hook_dockTrait(id self, SEL _cmd) {
+    if (orig_dockTrait) orig_dockTrait(self, _cmd);
+    if (DockOn() && SBXBool(@"transparentDock", NO)) {
+        SBXHideDockPart(SBXIdCall(self, @"backgroundView"));
+        SBXHideDockPart(SBXIdCall(self, @"shadowView"));
+        if ([self respondsToSelector:NSSelectorFromString(@"setNeedsLayout")])
+            ((void (*)(id, SEL))objc_msgSend)(self, NSSelectorFromString(@"setNeedsLayout"));
+    }
 }
 
 #pragma mark - 安装
@@ -688,21 +876,13 @@ __attribute__((constructor)) static void SBXInit(void) {
 
         }
         if (c) {
-            // 原版/ TrollPad 都是 hook 这个【类方法】，不是 C 函数
-            Class dockCls = objc_getClass("SBFloatingDockController");
-            if (dockCls) {
-                SEL cs = NSSelectorFromString(@"isFloatingDockSupported");
-                Method cm = class_getClassMethod(dockCls, cs);
-                if (cm) {
-                    gHookMsgEx(object_getClass((id)dockCls), cs,
-                               (IMP)hook_isFloatingDockSupportedClass,
-                               (IMP *)&orig_isFloatingDockSupportedClass);
-                    SBXLog(@"已挂类方法 +[SBFloatingDockController isFloatingDockSupported]");
-                } else {
-                    SBXLog(@"类方法不存在：+[SBFloatingDockController isFloatingDockSupported]");
-                }
+            void *dockSym = dlsym(RTLD_DEFAULT, "isFloatingDockSupported");
+            if (dockSym && gHookFunc) {
+                gHookFunc(dockSym, (void *)hook_isFloatingDockSupportedFunc,
+                          (void **)&orig_isFloatingDockSupportedFunc);
+                SBXLog(@"已挂 C 函数 isFloatingDockSupported");
             } else {
-                SBXLog(@"类不存在：SBFloatingDockController");
+                SBXLog(@"找不到 C 函数 isFloatingDockSupported");
             }
             HookMsg("SBFloatingDockDefaults", "recentsEnabled", (IMP)hook_recentsEnabled, (IMP *)&orig_recentsEnabled);
             HookMsg("SBFloatingDockDefaults", "setRecentsEnabled:", (IMP)hook_setRecentsEnabled, (IMP *)&orig_setRecentsEnabled);
@@ -711,6 +891,9 @@ __attribute__((constructor)) static void SBXInit(void) {
             HookMsg("SBFloatingDockView", "updateDividerVisualStyling", (IMP)hook_updateDivider, (IMP *)&orig_updateDivider);
             HookMsg("SBFloatingDockView", "layoutSubviews", (IMP)hook_dockViewLayout, (IMP *)&orig_dockViewLayout);
             HookMsg("SBFloatingDockPlatterView", "layoutSubviews", (IMP)hook_platterLayout, (IMP *)&orig_platterLayout);
+            HookMsg("SBFloatingDockPlatterView", "_dynamicUserInterfaceTraitDidChange", (IMP)hook_dockTrait, (IMP *)&orig_dockTrait);
+            HookMsg("SBFloatingDockIconListView", "configureIconView:forIcon:", (IMP)hook_dockListConfigure, (IMP *)&orig_dockListConfigure);
+            HookMsg("SBFloatingDockSuggestionsViewController", "configureIconView:forIcon:", (IMP)hook_suggConfigure, (IMP *)&orig_suggConfigure);
             HookMsg("SBFloatingDockController", "initWithWindowScene:iconController:", (IMP)hook_dockInit, (IMP *)&orig_dockInit);
             HookMsg("SBFloatingDockController", "floatingDockWindow", (IMP)hook_dockWindow, (IMP *)&orig_dockWindow);
             HookMsg("SBFloatingDockViewController", "translationFromFullyPresentedFrame", (IMP)hook_translationVC, (IMP *)&orig_translationVC);
@@ -718,6 +901,9 @@ __attribute__((constructor)) static void SBXInit(void) {
             HookMsg("SBFloatingDockBehaviorAssertion", "gesturePossible", (IMP)hook_gesturePossible, (IMP *)&orig_gesturePossible);
             HookMsg("SBDeckSwitcherModifier", "shouldConfigureInAppDockHiddenAssertion", (IMP)hook_shouldHideInAppDock, (IMP *)&orig_shouldHideInAppDock);
             HookMsg("SBFloatingDockSuggestionsModel", "maxSuggestions", (IMP)hook_maxSuggestions, (IMP *)&orig_maxSuggestions);
+            HookMsg("SBFloatingDockSuggestionsModel", "recentDisplayItemsController:shouldAddItem:", (IMP)hook_recentShouldAdd, (IMP *)&orig_recentShouldAdd);
+            HookMsg("SBFloatingDockSuggestionsModel", "initWithMaximumNumberOfSuggestions:iconController:recentsController:recentsDataStore:recentsDefaults:floatingDockDefaults:appSuggestionManager:analyticsClient:applicationController:", (IMP)hook_suggestInit8, (IMP *)&orig_suggestInit8);
+            HookMsg("SBFloatingDockSuggestionsModel", "initWithMaximumNumberOfSuggestions:iconController:recentsController:recentsDataStore:recentsDefaults:floatingDockDefaults:appSuggestionManager:applicationController:", (IMP)hook_suggestInit7, (IMP *)&orig_suggestInit7);
             HookMsg("SBFloatingDockSuggestionsViewController", "dockViewDidBecomeVisible", (IMP)hook_suggVisible, (IMP *)&orig_suggVisible);
         }
         SBXLog(@"hook 安装完成");
