@@ -59,22 +59,40 @@ jobs:
         run: |
           python3 - <<'EOF'
           import struct
-          for f in ("SBXDesktop.dylib", "bin/SBXDesktopPrefs", "default.metallib"):
-              try:
-                  d = open(f, "rb").read()
-                  magic, cputype, sub = struct.unpack_from("<III", d, 0)
-                  print(f, hex(magic), hex(cputype), hex(sub))
-              except Exception as e:
-                  print(f, "读取失败", e)
+          def check_fat(path):
+              d = open(path, "rb").read()
+              magic = struct.unpack_from(">I", d, 0)[0]
+              if magic != 0xcafebabe:
+                  raise SystemExit(f"{path}: not a FAT Mach-O")
+              n = struct.unpack_from(">I", d, 4)[0]
+              subs = []
+              for i in range(n):
+                  off = 8 + i * 20
+                  cpu, sub, pos, size, align = struct.unpack_from(">IIIII", d, off)
+                  subs.append(sub)
+                  print(path, i, "cpu", hex(cpu), "sub", hex(sub), "offset", hex(pos), "size", size)
+              if 0x80000002 not in subs:
+                  raise SystemExit(f"{path}: missing arm64e subtype")
+          check_fat("SBXDesktop.dylib")
+          check_fat("bin/SBXDesktopPrefs")
           EOF
           xcrun lipo -info SBXDesktop.dylib
+
+      - name: Package deb
+        run: |
+          set -eo pipefail
+          python3 tools/ci_package.py --artifacts "$PWD" --output Feature-1.0.1_iphoneos-arm64e.deb
+          dpkg-deb -c Feature-1.0.1_iphoneos-arm64e.deb
+          dpkg-deb -I Feature-1.0.1_iphoneos-arm64e.deb
+          sha256sum Feature-1.0.1_iphoneos-arm64e.deb
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: feature
+          name: feature-1.0.1
           path: |
             SBXDesktop.dylib
             bin/SBXDesktopPrefs
             default.metallib
+            Feature-1.0.1_iphoneos-arm64e.deb
           if-no-files-found: error
