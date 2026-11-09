@@ -491,11 +491,32 @@ static void hook_setScrollEnabled(id self, SEL _cmd, BOOL enabled) {
 
 
 #pragma mark - ============ B. iPad 卡片后台（只保留 SystemBox 已证实的网格参数）============
-// 卡片开关只改变切换器网格的样式、尺寸和间距。
-// 不伪装 UIDevice / isDevicePad，不吞 coordinator 转场，也不改 App→Home 动画。
-// SystemBox 的“以 iPad 形式打开 App”是另一个独立开关，不能绑到卡片开关。
+// 卡片开关改变切换器网格参数；仅在加载切换器内容的 TLS 作用域内临时返回 iPad idiom。
+// 不全局伪装设备身份、不吞 coordinator 转场，也不改变普通 App→Home 的类型判断。
+// SystemBox 的“以 iPad 形式打开 App”仍是独立功能。
 static BOOL gCardOn = NO;
 static inline BOOL SBXTake(void) { return gCardOn; }
+
+// SystemBox 的关键卡片链：只在加载切换器内容期间临时返回 iPad idiom。
+// 不能全局伪装，否则普通 App→Home 也会走 iPad 转场；必须与原方法成对、可回滚。
+static _Thread_local int gCardLoadDepth = 0;
+static NSInteger (*orig_userInterfaceIdiom)(id, SEL);
+static NSInteger hook_userInterfaceIdiom(id self, SEL _cmd) {
+    if (SBXTake() && gCardLoadDepth > 0) return UIUserInterfaceIdiomPad;
+    return orig_userInterfaceIdiom ? orig_userInterfaceIdiom(self, _cmd)
+                                   : UIUserInterfaceIdiomPhone;
+}
+static id (*orig_loadContent)(id, SEL, id);
+static id hook_loadContent(id self, SEL _cmd, id scene) {
+    gCardLoadDepth++;
+    id result = nil;
+    @try {
+        result = orig_loadContent ? orig_loadContent(self, _cmd, scene) : nil;
+    } @finally {
+        gCardLoadDepth--;
+    }
+    return result;
+}
 
 // ---- 1. SBAppSwitcherSettings：样式与尺寸（17.2 头文件全部确认）----
 static long (*orig_switcherStyle)(id, SEL);
@@ -657,6 +678,8 @@ __attribute__((constructor)) static void SBXInit(void) {
         if (b) {
             SBXLog(@"卡片后台：安全网格模式（5 条参数 hook，不接管 App→Home 转场）");
             gCardOn = YES;
+            HookMsg("UIDevice", "userInterfaceIdiom", (IMP)hook_userInterfaceIdiom, (IMP *)&orig_userInterfaceIdiom);
+            HookMsg("SBMainSwitcherControllerCoordinator", "_loadContentViewControllerIfNecessaryForWindowScene:", (IMP)hook_loadContent, (IMP *)&orig_loadContent);
             HookMsg("SBAppSwitcherSettings", "effectiveSwitcherStyle", (IMP)hook_switcherStyle, (IMP *)&orig_switcherStyle);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherPageScale", (IMP)hook_gridPageScale, (IMP *)&orig_gridPageScale);
             HookMsg("SBAppSwitcherSettings", "gridSwitcherHorizontalInterpageSpacingPortrait", (IMP)hook_gridHSpacing, (IMP *)&orig_gridHSpacing);
