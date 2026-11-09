@@ -545,6 +545,30 @@ static void hook_vcWillAppear(id self, SEL _cmd, BOOL animated) {
     }
 }
 
+// 对照 SBX：离开时先执行系统原方法，再隐藏按钮。
+static void (*orig_vcWillDisappear)(id, SEL, BOOL);
+static void hook_vcWillDisappear(id self, SEL _cmd, BOOL animated) {
+    if (orig_vcWillDisappear) orig_vcWillDisappear(self, _cmd, animated);
+    SBXSetButtonVisible(NO);
+    SBXLog(@"切换器 viewWillDisappear：已请求隐藏按钮");
+}
+
+// 完全离开后，只移除这个控制器关联的按钮，并清掉关联。
+static void (*orig_vcDidDisappear)(id, SEL, BOOL);
+static void hook_vcDidDisappear(id self, SEL _cmd, BOOL animated) {
+    if (orig_vcDidDisappear) orig_vcDidDisappear(self, _cmd, animated);
+    SBXSetButtonVisible(NO);
+    UIButton *b = objc_getAssociatedObject(self, &kButtonKey);
+    if (b) {
+        // 隐藏时已推进代次；这里仅清理当前控制器的关联按钮。
+        [b.layer removeAllAnimations];
+        [b removeFromSuperview];
+        [SBXButtonTable() removeObject:b];
+        objc_setAssociatedObject(self, &kButtonKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    SBXLog(@"切换器 viewDidDisappear：关联按钮%@", b ? @"已移除" : @"不存在");
+}
+
 // 转场：DidBegin 纯透传；WillEnd/DidEnd 后若切换器可见则显示
 static void (*orig_trBegin)(id, SEL, id, id);
 static void hook_trBegin(id self, SEL _cmd, id coord, id ctx) {
@@ -874,6 +898,8 @@ __attribute__((constructor)) static void SBXInit(void) {
         if (a) {
             HookMsg("SBFluidSwitcherViewController", "viewDidLoad", (IMP)hook_switcherDidLoad, (IMP *)&orig_switcherDidLoad);
             HookMsg("SBFluidSwitcherViewController", "viewWillAppear:", (IMP)hook_vcWillAppear, (IMP *)&orig_vcWillAppear);
+            HookMsg("SBFluidSwitcherViewController", "viewWillDisappear:", (IMP)hook_vcWillDisappear, (IMP *)&orig_vcWillDisappear);
+            HookMsg("SBFluidSwitcherViewController", "viewDidDisappear:", (IMP)hook_vcDidDisappear, (IMP *)&orig_vcDidDisappear);
             HookMsg("SBFluidSwitcherViewController", "viewDidLayoutSubviews", (IMP)hook_switcherLayout, (IMP *)&orig_switcherLayout);
             HookMsg("SBMainSwitcherControllerCoordinator",
                     "layoutStateTransitionCoordinator:transitionDidBeginWithTransitionContext:", (IMP)hook_trBegin, (IMP *)&orig_trBegin);
